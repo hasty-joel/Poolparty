@@ -1,23 +1,6 @@
 import { TicketRecord, TicketCategory, InventoryDashboardStats, CheckInResult, PublicInventoryCounts } from '../types/inventory';
 
-let currentAdminPasscode: string = '';
-
 export const TicketService = {
-  /**
-   * Set passcode for authorized admin dashboard requests
-   */
-  setAdminPasscode(code: string) {
-    currentAdminPasscode = code;
-  },
-
-  getAdminPasscode(): string {
-    return currentAdminPasscode;
-  },
-
-  getAdminHeaders(): Record<string, string> {
-    return currentAdminPasscode ? { 'x-admin-passcode': currentAdminPasscode } : {};
-  },
-
   /**
    * Public Inventory Counts (Calls secure server endpoint)
    * Strictly returns counts only; no customer records or QR tokens
@@ -71,9 +54,7 @@ export const TicketService = {
    */
   async getAllTickets(): Promise<TicketRecord[]> {
     try {
-      const res = await fetch('/api/admin/tickets', {
-        headers: { ...this.getAdminHeaders() },
-      });
+      const res = await fetch('/api/admin/tickets');
       const data = await res.json();
       if (data.success && data.tickets) {
         return data.tickets;
@@ -172,10 +153,7 @@ export const TicketService = {
     try {
       const res = await fetch('/api/admin/physical-sale', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAdminHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
       return await res.json();
@@ -191,10 +169,7 @@ export const TicketService = {
     try {
       const res = await fetch('/api/admin/confirm-payment', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAdminHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticketId }),
       });
       const data = await res.json();
@@ -211,10 +186,7 @@ export const TicketService = {
     try {
       const res = await fetch('/api/admin/release-ticket', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAdminHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticketId, releaseToInventory }),
       });
       const data = await res.json();
@@ -331,9 +303,7 @@ export const TicketService = {
    */
   async getAllOrders(): Promise<any[]> {
     try {
-      const res = await fetch('/api/admin/orders', {
-        headers: { ...this.getAdminHeaders() },
-      });
+      const res = await fetch('/api/admin/orders');
       const data = await res.json();
       return data.success && data.orders ? data.orders : [];
     } catch {
@@ -348,10 +318,7 @@ export const TicketService = {
     try {
       const res = await fetch('/api/admin/verify-relworx-transaction', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAdminHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orderRef }),
       });
       return await res.json();
@@ -368,40 +335,13 @@ export const TicketService = {
   },
 
   /**
-   * Verify Admin / Gate Staff Passcode with server
-   */
-  async verifyAdminPasscode(passcode: string): Promise<{ success: boolean; message?: string; error?: string }> {
-    try {
-      const res = await fetch('/api/admin/verify-passcode', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-passcode': passcode.trim(),
-        },
-        body: JSON.stringify({ passcode: passcode.trim() }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        return { success: true, message: data.message };
-      }
-      return { success: false, error: data.error || data.message || `HTTP ${res.status}` };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error verifying passcode' };
-    }
-  },
-
-  /**
    * Atomic Gate Check-in (Calls secure server endpoint)
-   * Attaches authorized gate staff / admin headers
    */
   async verifyAndCheckIn(tokenOrNumber: string): Promise<CheckInResult> {
     try {
       const res = await fetch('/api/tickets/verify-checkin', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...this.getAdminHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tokenOrNumber }),
       });
       return await res.json();

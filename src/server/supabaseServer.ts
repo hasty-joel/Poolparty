@@ -66,15 +66,6 @@ export interface TicketRow {
 
 export type OrderRow = OrderRecord;
 
-export interface MarkPaidResult {
-  success: boolean;
-  status: 'already_paid' | 'paid' | 'recovered_and_paid' | 'overcapacity_manual_review' | 'failed';
-  error?: string;
-  issuedCount?: number;
-  order?: OrderRow;
-  tickets?: TicketRow[];
-}
-
 // In-memory atomic fallback store if SUPABASE_SERVICE_ROLE_KEY is not yet injected
 function generateUuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -156,58 +147,7 @@ let serverOrdersStore: OrderRow[] = [
   },
 ];
 
-const memoryRateLimitStore = new Map<string, { count: number; resetAt: number }>();
-
 export const SupabaseServerService = {
-  /**
-   * Production-grade persistent rate limiting (backed by Supabase public.rate_limits table)
-   * Falls back gracefully to memory store if database is offline or table pending creation
-   */
-  async checkRateLimitPersistent(
-    key: string,
-    maxRequests: number,
-    windowMs: number
-  ): Promise<{ allowed: boolean; count: number; retryAfterSeconds: number }> {
-    const windowSeconds = Math.max(1, Math.ceil(windowMs / 1000));
-
-    if (supabaseAdmin) {
-      try {
-        const { data, error } = await supabaseAdmin.rpc('check_rate_limit', {
-          p_key: key,
-          p_max_requests: maxRequests,
-          p_window_seconds: windowSeconds,
-        });
-
-        if (!error && data && typeof data.allowed === 'boolean') {
-          return {
-            allowed: Boolean(data.allowed),
-            count: Number(data.count) || 1,
-            retryAfterSeconds: Number(data.retry_after_seconds) || 0,
-          };
-        }
-      } catch {
-        // Fall back to memory bucket below
-      }
-    }
-
-    // In-memory fallback
-    const now = Date.now();
-    let bucket = memoryRateLimitStore.get(key);
-    if (!bucket || now > bucket.resetAt) {
-      bucket = { count: 1, resetAt: now + windowMs };
-      memoryRateLimitStore.set(key, bucket);
-      return { allowed: true, count: 1, retryAfterSeconds: 0 };
-    }
-
-    bucket.count++;
-    const retryAfter = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
-    return {
-      allowed: bucket.count <= maxRequests,
-      count: bucket.count,
-      retryAfterSeconds: retryAfter,
-    };
-  },
-
   /**
    * Health Check: Test connection to live Supabase project
    */
@@ -416,67 +356,23 @@ export const SupabaseServerService = {
 
     if (supabaseAdmin) {
       try {
-        // 1. Attempt atomic stored function with FOR UPDATE SKIP LOCKED
-        const rpcRes = await supabaseAdmin.rpc('reserve_tickets_atomic', {
-          p_order_ref: orderRef,
-          p_category: category,
-          p_quantity: quantity,
-          p_unit_price: unitPrice,
-          p_total_amount: totalAmount,
-          p_buyer_name: buyerName.trim(),
-          p_buyer_email: buyerEmail.trim(),
-          p_buyer_phone: buyerPhone.trim(),
-          p_network: network,
-          p_reserved_minutes: 10,
-        });
+        const { data: available, error: fetchErr } = await supabaseAdmin
+          .from('tickets')
+          .select('id, ticket_number')
+          .eq('category', category)
+          .eq('status', 'available')
+          .order('ticket_number', { ascending: true })
+          .limit(quantity);
 
-        if (!rpcRes.error && rpcRes.data) {
-          if (!rpcRes.data.success) {
-            return {
-              success: false,
-              message: rpcRes.data.error === 'INSUFFICIENT_INVENTORY'
-                ? `Insufficient inventory! Only ${rpcRes.data.available_count ?? 0} ${category} ticket(s) currently available.`
-                : (rpcRes.data.error || 'Reservation could not be completed.'),
-            };
-          }
+        if (fetchErr || !available || available.length < quantity) {
+          const count = available?.length || 0;
+          return {
+            success: false,
+            message: `Insufficient inventory! Only ${count} ${category} ticket(s) currently available.`,
+          };
+        }
 
-          // Atomic DB reservation succeeded
-          serverOrdersStore.unshift({
-            id: generateUuid(),
-            order_ref: orderRef,
-            category,
-            quantity,
-            unit_price_ugx: unitPrice,
-            total_amount_ugx: totalAmount,
-            status: 'pending',
-            payment_method: 'relworx_mobile_money',
-            network,
-            buyer_name: buyerName.trim(),
-            buyer_email: buyerEmail.trim(),
-            buyer_phone: buyerPhone.trim(),
-            gateway: 'relworx',
-            reserved_until: reservedUntil,
-            created_at: new Date().toISOString(),
-          });
-        } else {
-          // Fallback if RPC function not yet applied to database
-          const { data: available, error: fetchErr } = await supabaseAdmin
-            .from('tickets')
-            .select('id, ticket_number')
-            .eq('category', category)
-            .eq('status', 'available')
-            .order('ticket_number', { ascending: true })
-            .limit(quantity);
-
-          if (fetchErr || !available || available.length < quantity) {
-            const count = available?.length || 0;
-            return {
-              success: false,
-              message: `Insufficient inventory! Only ${count} ${category} ticket(s) currently available.`,
-            };
-          }
-
-          allocatedTicketIds = available.map((t) => t.id);
+        allocatedTicketIds = available.map((t) => t.id);
 
         // Lock these tickets with 10-minute expiry
         let updateRes = await supabaseAdmin
@@ -546,7 +442,6 @@ export const SupabaseServerService = {
           });
         } catch {
           // public.orders table optional
-        }
         }
       } catch (err: any) {
         console.error('Database reservation error for Relworx:', err);
@@ -812,12 +707,7 @@ export const SupabaseServerService = {
 
         if (relCheck.success && relCheck.status === 'success') {
           // Confirmed payment on Relworx! Mark order as paid atomically
-          await this.markOrderAsPaid(orderRef, {
-            amount: relCheck.amount,
-            currency: relCheck.currency || 'UGX',
-            relworx: relCheck,
-            relworx_internal_ref: relCheck.internal_reference,
-          });
+          await this.markOrderAsPaid(orderRef, { relworx: relCheck, relworx_internal_ref: relCheck.internal_reference });
           return await this.getOrderStatus(orderRef);
         } else if (relCheck.status === 'failed') {
           await this.releaseReservationByOrderRef(orderRef);
@@ -852,248 +742,84 @@ export const SupabaseServerService = {
 
   /**
    * Idempotently mark order and its reserved tickets as PAID and ISSUED
-   * Strictly enforces:
-   * 1. Exact amount match (paid amount === expected order total)
-   * 2. Currency match ('UGX')
-   * 3. Idempotent check (already paid orders return success without reissuing)
-   * 4. Late-payment race condition recovery: if customer paid on handset but webhook arrived
-   *    after the 10-minute expiry window, the system safely recovers and issues tickets.
    */
-  async markOrderAsPaid(
-    orderRef: string,
-    paymentData?: {
-      amount?: number;
-      currency?: string;
-      relworx_internal_ref?: string | null;
-      flw_ref?: string | null;
-      id?: string | number;
-      relworx?: any;
-    }
-  ): Promise<MarkPaidResult> {
+  async markOrderAsPaid(orderRef: string, paymentData?: any): Promise<boolean> {
     const now = new Date().toISOString();
     const flwTxId = paymentData?.id ? String(paymentData.id) : null;
-    const relworxRef =
-      paymentData?.relworx_internal_ref ||
-      paymentData?.flw_ref ||
-      paymentData?.relworx?.internal_reference ||
-      null;
+    const flwRef = paymentData?.flw_ref || paymentData?.relworx_internal_ref || paymentData?.relworx?.internal_reference || null;
 
-    // 1. Locate the order
-    let order: OrderRow | null = null;
     if (supabaseAdmin) {
       try {
-        const { data } = await supabaseAdmin
-          .from('orders')
-          .select('*')
-          .eq('order_ref', orderRef)
-          .maybeSingle();
-        if (data) order = data as OrderRow;
-      } catch (err) {
-        console.warn('Error fetching order from Supabase in markOrderAsPaid:', err);
-      }
-    }
-    if (!order) {
-      order = serverOrdersStore.find((o) => o.order_ref === orderRef) || null;
-    }
-
-    if (!order) {
-      return {
-        success: false,
-        status: 'failed',
-        error: `ORDER_NOT_FOUND: Order reference ${orderRef} does not exist.`,
-      };
-    }
-
-    // 2. Idempotency Check: if already paid, return immediately without re-modifying tickets
-    if (order.status === 'paid') {
-      return {
-        success: true,
-        status: 'already_paid',
-        issuedCount: order.quantity,
-        order,
-      };
-    }
-
-    // 3. Exact Amount Validation
-    if (paymentData?.amount !== undefined && paymentData?.amount !== null) {
-      const paidAmt = Math.round(Number(paymentData.amount));
-      if (paidAmt !== order.total_amount_ugx) {
-        console.error(
-          `[Payment Security Alert] Amount mismatch for order ${orderRef}: expected UGX ${order.total_amount_ugx}, got UGX ${paidAmt}`
-        );
-        return {
-          success: false,
-          status: 'failed',
-          error: `AMOUNT_MISMATCH: Order requires UGX ${order.total_amount_ugx}, but received UGX ${paidAmt}.`,
-        };
-      }
-    }
-
-    // 4. Exact Currency Validation
-    if (paymentData?.currency) {
-      const cur = String(paymentData.currency).trim().toUpperCase();
-      if (cur !== 'UGX') {
-        console.error(`[Payment Security Alert] Currency mismatch for order ${orderRef}: expected UGX, got ${cur}`);
-        return {
-          success: false,
-          status: 'failed',
-          error: `CURRENCY_MISMATCH: Expected UGX, received ${cur}.`,
-        };
-      }
-    }
-
-    const isLateRecovery = order.status === 'expired' || order.status === 'cancelled';
-
-    // 5. Update tickets & order in Supabase if live
-    if (supabaseAdmin) {
-      try {
-        // First check if tickets are currently reserved under this order_ref
-        const { data: reservedTickets } = await supabaseAdmin
-          .from('tickets')
-          .select('id, ticket_number, status')
-          .eq('order_ref', orderRef);
-
-        let ticketIdsToIssue: string[] = [];
-
-        if (reservedTickets && reservedTickets.length >= order.quantity) {
-          ticketIdsToIssue = reservedTickets.map((t) => t.id);
-        } else {
-          // Late payment race: tickets may have been released back to 'available' when reservation expired!
-          const { data: availableTickets } = await supabaseAdmin
-            .from('tickets')
-            .select('id, ticket_number')
-            .eq('category', order.category)
-            .eq('status', 'available')
-            .order('ticket_number', { ascending: true })
-            .limit(order.quantity);
-
-          if (availableTickets && availableTickets.length >= order.quantity) {
-            ticketIdsToIssue = availableTickets.map((t) => t.id);
-          } else {
-            // Overcapacity edge case: Customer paid, but category sold out during delay
-            console.error(`[CRITICAL OVERCAPACITY] Late payment confirmed for order ${orderRef}, but ${order.category} is sold out!`);
-            await supabaseAdmin
-              .from('orders')
-              .update({
-                status: 'paid',
-                paid_at: now,
-                relworx_internal_ref: relworxRef,
-                flw_transaction_id: flwTxId,
-              })
-              .eq('order_ref', orderRef);
-
-            return {
-              success: true,
-              status: 'overcapacity_manual_review',
-              error: 'CAPACITY_EXCEEDED_AFTER_LATE_PAYMENT: Event organizers notified to reassign capacity or refund.',
-              issuedCount: 0,
-              order,
-            };
-          }
-        }
-
-        // Atomically transition the tickets to ISSUED and PAID
-        const { data: updatedTickets, error: issueErr } = await supabaseAdmin
+        // Mark tickets as issued and paid
+        let { error: tErr } = await supabaseAdmin
           .from('tickets')
           .update({
             status: 'issued',
             payment_status: 'paid',
-            buyer_name: order.buyer_name,
-            buyer_email: order.buyer_email,
-            buyer_phone: order.buyer_phone,
-            order_ref: orderRef,
             paid_at: now,
-            relworx_internal_ref: relworxRef,
-          })
-          .in('id', ticketIdsToIssue)
-          .select();
-
-        if (issueErr) {
-          throw issueErr;
-        }
-
-        // Mark order as paid
-        await supabaseAdmin
-          .from('orders')
-          .update({
-            status: 'paid',
-            paid_at: now,
-            relworx_internal_ref: relworxRef,
-            flw_transaction_id: flwTxId,
+            relworx_internal_ref: flwRef,
           })
           .eq('order_ref', orderRef);
 
-        order.status = 'paid';
-        order.paid_at = now;
-        order.relworx_internal_ref = relworxRef;
+        if (tErr && (tErr.message?.includes('order_ref') || tErr.message?.includes('relworx_internal_ref'))) {
+          const ord = serverOrdersStore.find((o) => o.order_ref === orderRef);
+          if (ord) {
+            await supabaseAdmin
+              .from('tickets')
+              .update({
+                status: 'issued',
+                payment_status: 'paid',
+                paid_at: now,
+              })
+              .eq('buyer_name', ord.buyer_name)
+              .eq('buyer_phone', ord.buyer_phone)
+              .eq('status', 'reserved');
+          }
+        }
 
-        return {
-          success: true,
-          status: isLateRecovery ? 'recovered_and_paid' : 'paid',
-          issuedCount: updatedTickets?.length || order.quantity,
-          order,
-          tickets: (updatedTickets as TicketRow[]) || undefined,
-        };
-      } catch (err: any) {
+        // Mark order as paid in orders table if exists
+        try {
+          await supabaseAdmin
+            .from('orders')
+            .update({
+              status: 'paid',
+              paid_at: now,
+              relworx_internal_ref: flwRef,
+              flw_transaction_id: flwTxId,
+              flw_ref: flwRef,
+            })
+            .eq('order_ref', orderRef);
+        } catch {
+          // table optional
+        }
+
+        return true;
+      } catch (err) {
         console.error('Error marking order as paid in Supabase:', err);
-        return {
-          success: false,
-          status: 'failed',
-          error: err?.message || 'Database error confirming payment.',
-        };
+        return false;
       }
     }
 
-    // In-memory atomic fallback store handling
-    const existingReserved = serverMemoryStore.filter((t) => t.order_ref === orderRef);
-    let targetTickets: TicketRow[] = [];
-
-    if (existingReserved.length >= order.quantity) {
-      targetTickets = existingReserved.slice(0, order.quantity);
-    } else {
-      // Late recovery: find available tickets of the same category
-      const available = serverMemoryStore.filter((t) => t.category === order.category && t.status === 'available');
-      if (available.length >= order.quantity) {
-        targetTickets = available.slice(0, order.quantity);
-      } else {
-        // Overcapacity
-        order.status = 'paid';
-        order.paid_at = now;
-        order.relworx_internal_ref = relworxRef;
-        return {
-          success: true,
-          status: 'overcapacity_manual_review',
-          error: 'CAPACITY_EXCEEDED_AFTER_LATE_PAYMENT',
-          issuedCount: 0,
-          order,
-        };
+    serverMemoryStore.forEach((t) => {
+      if (t.order_ref === orderRef) {
+        t.status = 'issued';
+        t.payment_status = 'paid';
+        t.paid_at = now;
+        t.relworx_internal_ref = flwRef;
+        t.flw_transaction_id = flwTxId;
       }
-    }
-
-    targetTickets.forEach((t) => {
-      t.status = 'issued';
-      t.payment_status = 'paid';
-      t.buyer_name = order.buyer_name;
-      t.buyer_email = order.buyer_email;
-      t.buyer_phone = order.buyer_phone;
-      t.order_ref = orderRef;
-      t.paid_at = now;
-      t.relworx_internal_ref = relworxRef;
-      t.flw_transaction_id = flwTxId;
     });
 
-    order.status = 'paid';
-    order.paid_at = now;
-    order.relworx_internal_ref = relworxRef;
-    order.flw_transaction_id = flwTxId;
+    const ord = serverOrdersStore.find((o) => o.order_ref === orderRef);
+    if (ord) {
+      ord.status = 'paid';
+      ord.paid_at = now;
+      ord.relworx_internal_ref = flwRef;
+      ord.flw_transaction_id = flwTxId;
+      ord.flw_ref = flwRef;
+    }
 
-    return {
-      success: true,
-      status: isLateRecovery ? 'recovered_and_paid' : 'paid',
-      issuedCount: targetTickets.length,
-      order,
-      tickets: targetTickets,
-    };
+    return true;
   },
 
   /**
@@ -1109,17 +835,7 @@ export const SupabaseServerService = {
     });
 
     if (check.status === 'success') {
-      const markResult = await this.markOrderAsPaid(orderRef, {
-        amount: check.amount,
-        currency: check.currency || 'UGX',
-        relworx: check,
-        relworx_internal_ref: check.internal_reference,
-      });
-
-      if (!markResult.success) {
-        return { success: false, message: `Payment could not be confirmed: ${markResult.error}` };
-      }
-
+      await this.markOrderAsPaid(orderRef, { relworx: check, relworx_internal_ref: check.internal_reference });
       return { success: true, message: 'Relworx confirmed payment! Tickets successfully issued.' };
     }
 
