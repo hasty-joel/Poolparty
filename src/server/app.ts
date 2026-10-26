@@ -1,7 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import { SupabaseServerService } from './supabaseServer';
-import { RelworxService } from './relworxService';
+import { SupabaseServerService } from './supabaseServer.ts';
+import { RelworxService } from './relworxService.ts';
 
 dotenv.config();
 

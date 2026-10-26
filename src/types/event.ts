@@ -68,7 +68,7 @@ export const EVENT_DATA = {
   rsvpTel: '+256775198484',
   rsvpWhatsApp: 'https://wa.me/256775198484',
   googleMapsUrl: 'https://maps.google.com/?q=Prince+Resort+Bunamwaya+Bella+Uganda',
-  flyerImage: '/public/assets/aistudio/Luxury_Tropical_Pool_Party_Flyer_724fe1fb.png',
+  flyerImage: '/assets/aistudio/Luxury_Tropical_Pool_Party_Flyer_724fe1fb.png',
 };
 
 export type PaymentMethod = 'mtn_momo' | 'airtel_money' | 'card';

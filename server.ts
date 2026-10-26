@@ -1,7 +1,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { createExpressApp } from './src/server/app';
+import { createExpressApp } from './src/server/app.ts';
 
 dotenv.config();
 
@@ -22,7 +22,7 @@ async function startServer() {
     // Mount Vite middlewares in development
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);

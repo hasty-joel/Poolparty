@@ -66,12 +66,9 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const shareWhatsApp = () => {
-    const text = encodeURIComponent(
-      `Pool Party 2026 Ticket\n\nPass: #${ticket.ticket_number} (${ticket.category} Pass)\nGuest: ${ticket.buyer_name || 'Guest'}\nVerify Ticket: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026`
-    );
-    window.open(`https://wa.me/?text=${text}`, '_blank');
-  };
+  const whatsAppShareHref = `https://wa.me/?text=${encodeURIComponent(
+    `Pool Party 2026 Ticket\n\nPass: #${ticket.ticket_number} (${ticket.category} Pass)\nGuest: ${ticket.buyer_name || 'Guest'}\nVerify Ticket: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026`
+  )}`;
 
   const guestName = ticket.buyer_name || 'Unassigned / Available';
 
@@ -156,13 +153,15 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
                 <span>{copiedLink ? 'Copied' : 'Copy Verification URL'}</span>
               </button>
 
-              <button
-                onClick={shareWhatsApp}
+              <a
+                href={whatsAppShareHref}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 <Share2 className="w-4 h-4" />
                 <span>WhatsApp</span>
-              </button>
+              </a>
             </div>
 
             <div className="text-right text-xs">

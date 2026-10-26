@@ -1,5 +1,8 @@
 import React from 'react';
 import { Waves, Disc3, Users, Wine, Info, Sparkles } from 'lucide-react';
+import poolAtmosphereImg from '../assets/images/pool_atmosphere_1793036984503.jpg';
+import poolsideMusicImg from '../assets/images/poolside_music_1793036985215.jpg';
+import poolRefreshmentsImg from '../assets/images/pool_refreshments_1793036986532.jpg';
 
 export const Experience: React.FC = () => {
   return (
@@ -34,7 +37,7 @@ export const Experience: React.FC = () => {
           <div className="md:col-span-7 glass-panel rounded-2xl overflow-hidden border border-white/10 flex flex-col group hover:border-cyan-500/30 transition-all duration-300">
             <div className="relative h-64 sm:h-72 overflow-hidden">
               <img
-                src="/src/assets/images/pool_atmosphere_1793036984503.jpg"
+                src={poolAtmosphereImg}
                 alt="Crystal clear resort pool with teak deck and sun loungers"
                 className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-500"
                 referrerPolicy="no-referrer"
@@ -68,7 +71,7 @@ export const Experience: React.FC = () => {
           <div className="md:col-span-5 glass-panel rounded-2xl overflow-hidden border border-white/10 flex flex-col group hover:border-cyan-500/30 transition-all duration-300">
             <div className="relative h-64 sm:h-72 overflow-hidden">
               <img
-                src="/src/assets/images/poolside_music_1793036985215.jpg"
+                src={poolsideMusicImg}
                 alt="DJ booth and ambient poolside party sound system"
                 className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-500"
                 referrerPolicy="no-referrer"
@@ -100,7 +103,7 @@ export const Experience: React.FC = () => {
           <div className="md:col-span-5 glass-panel rounded-2xl overflow-hidden border border-white/10 flex flex-col group hover:border-cyan-500/30 transition-all duration-300">
             <div className="relative h-64 sm:h-72 overflow-hidden">
               <img
-                src="/src/assets/images/pool_refreshments_1793036986532.jpg"
+                src={poolRefreshmentsImg}
                 alt="Artisan cocktail and refreshing tropical beverages"
                 className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-500"
                 referrerPolicy="no-referrer"

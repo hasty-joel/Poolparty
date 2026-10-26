@@ -49,6 +49,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'physical_sale' | 'setup_guide'>('inventory');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmReleaseId, setConfirmReleaseId] = useState<string | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [verifyingOrderRef, setVerifyingOrderRef] = useState<string | null>(null);
   const [healthData, setHealthData] = useState<any>(null);
@@ -101,16 +103,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleVerifyRelworxOrder = async (orderRef: string) => {
     setVerifyingOrderRef(orderRef);
+    setActionError(null);
     try {
       const res = await TicketService.verifyRelworxTransactionAdmin(orderRef);
       if (res.success) {
         setActionSuccess(`Relworx verified: Order ${orderRef} is confirmed & paid!`);
         await loadData();
       } else {
-        alert(res.message || 'Relworx payment not confirmed yet.');
+        setActionError(res.message || 'Relworx payment not confirmed yet.');
       }
     } catch (err: any) {
-      alert('Error verifying with Relworx: ' + err?.message);
+      setActionError('Error verifying with Relworx: ' + err?.message);
     } finally {
       setVerifyingOrderRef(null);
     }
@@ -146,14 +149,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       await TicketRenderer.generatePdfTicket(ticket);
     } catch (err) {
-      alert('Error generating reprint PDF: ' + err);
+      setActionError('Error generating reprint PDF: ' + err);
     }
   };
 
   const handleReleaseTicket = async (ticket: TicketRecord) => {
-    if (!confirm(`Are you sure you want to release ticket #${ticket.ticket_number} back to available inventory?`)) {
+    if (confirmReleaseId !== ticket.id) {
+      setConfirmReleaseId(ticket.id);
+      setTimeout(() => setConfirmReleaseId((prev) => (prev === ticket.id ? null : prev)), 4000);
       return;
     }
+    setConfirmReleaseId(null);
     const ok = await TicketService.cancelTicket(ticket.id, true);
     if (ok) {
       setActionSuccess(`Ticket #${ticket.ticket_number} released back to Available inventory.`);
@@ -416,6 +422,15 @@ order by category;`;
           <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>{actionSuccess}</span>
+          </div>
+        )}
+
+        {actionError && (
+          <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-200 text-xs flex items-center justify-between gap-2">
+            <span>{actionError}</span>
+            <button onClick={() => setActionError(null)} className="text-rose-400 hover:text-white cursor-pointer">
+              <XCircle className="w-4 h-4" />
+            </button>
           </div>
         )}
 
@@ -775,10 +790,14 @@ order by category;`;
                           {t.status !== 'available' && (
                             <button
                               onClick={() => handleReleaseTicket(t)}
-                              className="p-1 hover:text-rose-400 text-slate-500 rounded cursor-pointer"
+                              className={`p-1 rounded cursor-pointer ${
+                                confirmReleaseId === t.id
+                                  ? 'px-2 py-0.5 bg-rose-600 text-white text-[10px] font-bold uppercase'
+                                  : 'hover:text-rose-400 text-slate-500'
+                              }`}
                               title="Release back to inventory"
                             >
-                              <XCircle className="w-3.5 h-3.5" />
+                              {confirmReleaseId === t.id ? 'Confirm?' : <XCircle className="w-3.5 h-3.5" />}
                             </button>
                           )}
                         </div>
@@ -909,7 +928,8 @@ order by category;`;
                                     if (tList.length > 0) {
                                       onViewTicket(tList[0]);
                                     } else {
-                                      alert('Tickets for this order are listed in the Inventory tab.');
+                                      setActiveTab('inventory');
+                                      setActionSuccess('Switched to Inventory tab to view tickets for this order.');
                                     }
                                   }}
                                   className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 text-[11px] font-bold rounded-lg cursor-pointer"

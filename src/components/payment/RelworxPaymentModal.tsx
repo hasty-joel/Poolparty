@@ -179,7 +179,7 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
     try {
       await TicketRenderer.generatePdfTicket(activeTicket);
     } catch (err) {
-      alert('Error creating PDF: ' + err);
+      console.error('Error creating PDF:', err);
     } finally {
       setDownloadingPdf(false);
     }
@@ -190,7 +190,7 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
     try {
       await TicketRenderer.downloadTicketImage(activeTicket);
     } catch (err) {
-      alert('Error creating PNG: ' + err);
+      console.error('Error creating PNG:', err);
     }
   };
 
@@ -200,7 +200,7 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
     try {
       await TicketRenderer.downloadAllTicketsPdf(issuedTickets);
     } catch (err) {
-      alert('Error downloading tickets: ' + err);
+      console.error('Error downloading tickets:', err);
     } finally {
       setDownloadingPdf(false);
     }
@@ -222,13 +222,11 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
     ? `${window.location.origin}?verify=${activeTicket.qr_token}`
     : '';
 
-  const shareWhatsApp = () => {
-    if (!activeTicket) return;
-    const text = encodeURIComponent(
-      `My Pool Party 2026 Ticket is confirmed!\n\nPass #${activeTicket.ticket_number} (${activeTicket.category} Pass)\nGuest: ${activeTicket.buyer_name}\nDate: Friday, 11 December 2026\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\n\nVerify Entry: ${verifyUrl}`
-    );
-    window.open(`https://wa.me/?text=${text}`, '_blank');
-  };
+  const whatsAppShareHref = activeTicket
+    ? `https://wa.me/?text=${encodeURIComponent(
+        `My Pool Party 2026 Ticket is confirmed!\n\nPass #${activeTicket.ticket_number} (${activeTicket.category} Pass)\nGuest: ${activeTicket.buyer_name}\nDate: Friday, 11 December 2026\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\n\nVerify Entry: ${verifyUrl}`
+      )}`
+    : '#';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto bg-black/80 backdrop-blur-sm">
@@ -458,13 +456,15 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
                 )}
 
                 <div className="flex items-center justify-between pt-2 border-t border-white/10 text-xs">
-                  <button
-                    onClick={shareWhatsApp}
+                  <a
+                    href={whatsAppShareHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1.5 font-semibold cursor-pointer"
                   >
                     <Share2 className="w-3.5 h-3.5" />
                     <span>Share on WhatsApp</span>
-                  </button>
+                  </a>
 
                   <span className="text-[11px] text-slate-500 font-mono">
                     Order Ref: {orderRef}

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Calendar, Clock, MapPin, ExternalLink, ShieldCheck, Car, Navigation, Compass, Sparkles } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
+import resortVenueImg from '../assets/images/resort_venue_prince_1793036985739.jpg';
 
 export const EventDetails: React.FC = () => {
   return (
@@ -63,7 +64,7 @@ export const EventDetails: React.FC = () => {
           {/* Venue Photography Card */}
           <div className="lg:col-span-7 rounded-2xl overflow-hidden glass-panel-subtle border border-white/10 relative min-h-[340px] flex flex-col justify-end">
             <img
-              src="/src/assets/images/resort_venue_prince_1793036985739.jpg"
+              src={resortVenueImg}
               alt="Prince Resort Bunamwaya Poolside grounds and gardens"
               className="absolute inset-0 w-full h-full object-cover object-center"
               referrerPolicy="no-referrer"

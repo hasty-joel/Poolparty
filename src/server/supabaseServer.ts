@@ -1,7 +1,7 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { RelworxService } from './relworxService';
-import { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order';
+import { RelworxService } from './relworxService.ts';
+import type { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order.ts';
 
 dotenv.config();
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Clock, MapPin, Ticket, Eye, Music } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
+import heroPoolImg from '../assets/images/hero_pool_luxury_1793036984424.jpg';
 
 interface HeroProps {
   onGetTicket: () => void;
@@ -37,7 +38,7 @@ export const Hero: React.FC<HeroProps> = ({ onGetTicket, onViewFlyer }) => {
       {/* Background imagery with subtle natural dark scrim */}
       <div className="absolute inset-0 z-0">
         <img
-          src="/src/assets/images/hero_pool_luxury_1793036984424.jpg"
+          src={heroPoolImg}
           alt="Prince Resort Poolside"
           className="w-full h-full object-cover object-center"
           referrerPolicy="no-referrer"

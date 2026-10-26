@@ -1,7 +1,7 @@
 /**
  * Flutterwave & Order Tracking Types for Pool Party
  */
-import { TicketCategory, TicketRecord } from './inventory';
+import type { TicketCategory, TicketRecord } from './inventory.ts';
 
 export type PaymentNetwork = 'MTN' | 'AIRTEL';
 export type OrderStatus = 'pending' | 'paid' | 'failed' | 'cancelled' | 'expired';
