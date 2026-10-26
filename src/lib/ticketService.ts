@@ -207,6 +207,7 @@ export const TicketService = {
     buyerEmail: string;
     buyerPhone: string;
     network: 'MTN' | 'AIRTEL';
+    isSandbox?: boolean;
   }): Promise<{
     success: boolean;
     orderRef?: string;
@@ -246,6 +247,22 @@ export const TicketService = {
     network: 'MTN' | 'AIRTEL';
   }) {
     return this.initiateRelworxPayment(payload);
+  },
+
+  /**
+   * Clearly labeled sandbox simulation trigger (available only when RELWORX_API_KEY is unset)
+   */
+  async simulateSandboxPaymentSuccess(orderRef: string): Promise<any> {
+    try {
+      const res = await fetch('/api/payments/relworx-simulate-success', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderRef }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Error simulating sandbox payment' };
+    }
   },
 
   /**

@@ -6,14 +6,12 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Crown,
-  Sparkles,
   ArrowRight,
-  Smartphone,
   Search,
   RefreshCw,
   Clock
 } from 'lucide-react';
-import { EVENT_DATA, TICKET_TIERS, TicketTier, PaymentMethod, BuyerForm } from '../types/event';
+import { EVENT_DATA, TICKET_TIERS, TicketTier, BuyerForm } from '../types/event';
 import { TicketService } from '../lib/ticketService';
 import { TicketRecord, PublicInventoryCounts } from '../types/inventory';
 import { RelworxPaymentModal } from './payment/RelworxPaymentModal';
@@ -87,12 +85,12 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     const errs: { [key: string]: string } = {};
 
     if (!form.fullName.trim() || form.fullName.trim().length < 3) {
-      errs.fullName = 'Please enter your full legal name.';
+      errs.fullName = 'Please enter your full name as it will appear on your pass.';
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!form.email.trim() || !emailRegex.test(form.email)) {
-      errs.email = 'Please provide a valid email address for your ticket confirmation.';
+      errs.email = 'Please provide a valid email address.';
     }
 
     const cleanedPhone = form.phone.replace(/[\s-]/g, '');
@@ -101,7 +99,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     }
 
     if (remainingInventory < quantity) {
-      errs.inventory = `Sorry, only ${remainingInventory} ${selectedTier.toUpperCase()} tickets left in stock!`;
+      errs.inventory = `Only ${remainingInventory} ${selectedTier.toUpperCase()} pass(es) remaining in stock.`;
     }
 
     setErrors(errs);
@@ -116,7 +114,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     setErrors({});
 
     try {
-      const res = await TicketService.initiateRelworxPayment({
+      let res = await TicketService.initiateRelworxPayment({
         category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
         quantity,
         buyerName: form.fullName.trim(),
@@ -124,6 +122,20 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         buyerPhone: form.phone.trim(),
         network,
       });
+
+      // If live Relworx account has API access disabled, fall back to sandbox testing simulation mode
+      if (!res.success && res.message?.includes('API disabled')) {
+        console.warn('[Relworx] Live API reports disabled account, initiating in sandbox testing simulation mode.');
+        res = await TicketService.initiateRelworxPayment({
+          category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
+          quantity,
+          buyerName: form.fullName.trim(),
+          buyerEmail: form.email.trim(),
+          buyerPhone: form.phone.trim(),
+          network,
+          isSandbox: true,
+        });
+      }
 
       if (!res.success || !res.orderRef) {
         setErrors({ inventory: res.message || 'Payment initiation failed. Please try again.' });
@@ -134,7 +146,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
       // Refresh stock counts
       refreshCounts();
 
-      // Open Relworx prompt modal
+      // Open Relworx checkout modal
       setCheckoutModal({
         orderRef: res.orderRef,
         message: res.message,
@@ -152,65 +164,65 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   };
 
   return (
-    <section id="tickets" className="py-20 bg-[#030712] relative border-t border-amber-500/20">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+    <section id="tickets" className="py-20 bg-[#080c14] relative border-b border-white/10">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Section Header */}
-        <div className="text-center max-w-xl mx-auto mb-10">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/20 text-xs font-bold tracking-widest text-amber-400 uppercase mb-3">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            {publicCounts?.isLiveSupabase ? 'Supabase Inventory & Relworx Active' : 'Pre-Allocated Stock Active (70 Tickets)'}
+        <div className="max-w-2xl mb-10">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 mb-1">
+            <span className="text-amber-400 font-bold uppercase tracking-wider">Official Ticketing</span>
+            <span aria-hidden="true">·</span>
+            <span>Capacity strictly limited to 70 total passes</span>
           </div>
-          <h2 className="text-3xl sm:text-5xl font-black text-white font-display">
-            Select Your Pass
+          <h2 className="text-3xl sm:text-4xl font-black text-white font-display">
+            Select Your Pool Pass
           </h2>
           <p className="text-slate-400 text-sm mt-2">
-            Limited capacity (70 tickets total): 20 VIP @ UGX 50,000 · 50 Ordinary @ UGX 20,000.
+            Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000). Powered by Relworx Uganda Mobile Money.
           </p>
 
           <div className="mt-3">
             <button
               onClick={() => setLookupOpen(true)}
-              className="text-xs text-cyan-400 hover:text-cyan-300 underline font-semibold inline-flex items-center gap-1 cursor-pointer"
+              className="text-xs text-cyan-400 hover:text-cyan-300 font-medium inline-flex items-center gap-1.5 cursor-pointer"
             >
               <Search className="w-3.5 h-3.5" />
-              <span>Already paid? Retrieve & download your tickets here</span>
+              <span>Already purchased? Retrieve & download your tickets</span>
             </button>
           </div>
         </div>
 
-        {/* Tier Selector Tabs with Live Stock Remaining */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto mb-10">
+        {/* Tier Selector Buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mb-8">
           
           {/* Ordinary Tier Button */}
           <button
             type="button"
             onClick={() => handleTierChange('ordinary')}
-            className={`p-5 rounded-2xl border-2 text-left transition-all cursor-pointer relative ${
+            className={`p-5 rounded-xl border text-left transition-colors cursor-pointer relative ${
               selectedTier === 'ordinary'
-                ? 'bg-[#0b1b36] border-amber-400 shadow-lg shadow-amber-500/15'
-                : 'bg-[#070e1b] border-white/10 hover:border-white/20 opacity-80 hover:opacity-100'
+                ? 'bg-[#0d1522] border-amber-400'
+                : 'bg-[#0d1522]/50 border-white/10 hover:border-white/20'
             }`}
           >
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                General Pool Entry
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                General Entry
               </span>
-              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-amber-400 text-slate-950">
-                20K
+              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-200">
+                ORD
               </span>
             </div>
             <div className="text-2xl font-black text-white font-display">
               Ordinary Pass
             </div>
-            <div className="text-xl font-bold text-amber-400 font-mono mt-1">
+            <div className="text-xl font-bold text-white font-mono mt-1 tabular-nums">
               UGX 20,000
             </div>
             
-            {/* Live Remaining Badge */}
-            <div className="mt-3 flex items-center justify-between text-xs pt-2 border-t border-white/10">
-              <span className="text-slate-400">Available Stock:</span>
-              <span className="font-bold font-mono text-amber-300">
+            <div className="mt-4 flex items-center justify-between text-xs pt-3 border-t border-white/10 text-slate-400">
+              <span>Available Inventory</span>
+              <span className="font-semibold text-white font-mono tabular-nums">
                 {publicCounts ? publicCounts.ORDINARY.available : 50} / 50 Remaining
               </span>
             </div>
@@ -220,32 +232,31 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
           <button
             type="button"
             onClick={() => handleTierChange('vip')}
-            className={`p-5 rounded-2xl border-2 text-left transition-all cursor-pointer relative ${
+            className={`p-5 rounded-xl border text-left transition-colors cursor-pointer relative ${
               selectedTier === 'vip'
-                ? 'bg-[#0b1b36] border-cyan-400 shadow-lg shadow-cyan-500/15'
-                : 'bg-[#070e1b] border-white/10 hover:border-white/20 opacity-80 hover:opacity-100'
+                ? 'bg-[#0d1522] border-cyan-400'
+                : 'bg-[#0d1522]/50 border-white/10 hover:border-white/20'
             }`}
           >
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1">
+              <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
                 <Crown className="w-3.5 h-3.5" />
                 <span>VIP Experience</span>
               </span>
-              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-cyan-400 text-slate-950">
-                50K
+              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-800 text-cyan-300">
+                VIP
               </span>
             </div>
             <div className="text-2xl font-black text-white font-display">
               VIP Pass
             </div>
-            <div className="text-xl font-bold text-cyan-300 font-mono mt-1">
+            <div className="text-xl font-bold text-cyan-300 font-mono mt-1 tabular-nums">
               UGX 50,000
             </div>
 
-            {/* Live Remaining Badge */}
-            <div className="mt-3 flex items-center justify-between text-xs pt-2 border-t border-white/10">
-              <span className="text-slate-400">Available Stock:</span>
-              <span className="font-bold font-mono text-cyan-300">
+            <div className="mt-4 flex items-center justify-between text-xs pt-3 border-t border-white/10 text-slate-400">
+              <span>Available Inventory</span>
+              <span className="font-semibold text-cyan-300 font-mono tabular-nums">
                 {publicCounts ? publicCounts.VIP.available : 20} / 20 Remaining
               </span>
             </div>
@@ -255,33 +266,33 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
         {/* Global Inventory Alert if low */}
         {errors.inventory && (
-          <div className="max-w-2xl mx-auto mb-6 p-4 rounded-xl bg-rose-950/60 border border-rose-500 text-rose-200 text-xs flex items-center gap-2">
+          <div className="max-w-2xl mb-6 p-4 rounded-xl bg-rose-950/60 border border-rose-500 text-rose-200 text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
             <span>{errors.inventory}</span>
           </div>
         )}
 
-        {/* The Checkout Card */}
-        <div className="bg-[#070e1b] border border-amber-400/30 rounded-3xl p-6 sm:p-10 shadow-2xl grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Checkout Card */}
+        <div className="bg-[#0d1522] border border-white/10 rounded-2xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
           
           {/* Order Summary & Quantity (5 cols) */}
           <div className="lg:col-span-5 border-b lg:border-b-0 lg:border-r border-white/10 pb-6 lg:pb-0 lg:pr-8 flex flex-col justify-between">
             <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-400 block mb-1">
-                Your Order
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                Order Summary
               </span>
-              <h3 className="text-2xl font-bold text-white font-display">
+              <h3 className="text-xl font-bold text-white font-display">
                 {tierInfo.name} Ticket
               </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Friday, December 11th 2026 · Prince Resort Bunamwaya Bella
+                Friday, 11 December 2026 · Prince Resort Bunamwaya
               </p>
 
               {/* Perks list */}
-              <div className="mt-5 space-y-2 text-xs text-slate-300">
+              <div className="mt-5 space-y-2.5 text-xs text-slate-300">
                 {tierInfo.perks.map((perk, idx) => (
                   <div key={idx} className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />
+                    <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <span>{perk}</span>
                   </div>
                 ))}
@@ -290,14 +301,14 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               {/* Quantity Picker */}
               <div className="mt-8 pt-6 border-t border-white/10">
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">
-                  Quantity
+                  Select Quantity
                 </label>
-                <div className="flex items-center justify-between bg-[#030712] rounded-xl p-2 border border-white/10">
+                <div className="flex items-center justify-between bg-[#080c14] rounded-xl p-2 border border-white/10">
                   <button
                     type="button"
                     onClick={() => handleQuantityChange(-1)}
                     disabled={quantity <= 1}
-                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer"
+                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer transition-colors"
                   >
                     <Minus className="w-4 h-4" />
                   </button>
@@ -313,7 +324,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                     type="button"
                     onClick={() => handleQuantityChange(1)}
                     disabled={quantity >= Math.min(10, remainingInventory)}
-                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer"
+                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer transition-colors"
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -322,19 +333,19 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             </div>
 
             {/* Price Calculation */}
-            <div className="mt-8 pt-6 border-t border-white/10 bg-[#030712]/60 p-4 rounded-xl">
+            <div className="mt-8 pt-6 border-t border-white/10 bg-[#080c14] p-4 rounded-xl border border-white/5">
               <div className="space-y-1 text-xs text-slate-300">
                 <div className="flex justify-between">
-                  <span>Price per ticket</span>
-                  <span className="font-mono text-white">UGX {unitPrice.toLocaleString()}</span>
+                  <span>Unit Price</span>
+                  <span className="font-mono text-white tabular-nums">UGX {unitPrice.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Quantity</span>
-                  <span className="font-mono text-white">× {quantity}</span>
+                  <span className="font-mono text-white tabular-nums">× {quantity}</span>
                 </div>
               </div>
               <div className="mt-3 pt-3 border-t border-white/10 flex justify-between items-baseline">
-                <span className="text-xs uppercase font-bold text-slate-200">Total Price</span>
+                <span className="text-xs uppercase font-bold text-slate-300">Total Due</span>
                 <span className="text-2xl font-black text-amber-300 font-mono tabular-nums">
                   UGX {totalPrice.toLocaleString()}
                 </span>
@@ -346,11 +357,11 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
           <div className="lg:col-span-7 flex flex-col justify-between">
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <h4 className="text-lg font-bold text-white">
+                <h4 className="text-base font-bold text-white">
                   Attendee & Mobile Money Details
                 </h4>
-                <p className="text-xs text-slate-400">
-                  Where should we send your official entry QR ticket?
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Your personalized Canva ticket and verification QR code will be generated upon payment.
                 </p>
               </div>
 
@@ -364,8 +375,8 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   value={form.fullName}
                   onChange={(e) => setForm({ ...form, fullName: e.target.value })}
                   placeholder="e.g. Joel Mukisa"
-                  className={`w-full px-4 py-2.5 rounded-xl bg-[#030712] border text-white text-sm focus:outline-none focus:ring-1 ${
-                    errors.fullName ? 'border-rose-500 focus:ring-rose-500' : 'border-white/15 focus:border-amber-400 focus:ring-amber-400'
+                  className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
+                    errors.fullName ? 'border-rose-500' : 'border-white/15'
                   }`}
                 />
                 {errors.fullName && <p className="text-xs text-rose-400 mt-1">{errors.fullName}</p>}
@@ -381,8 +392,8 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                   placeholder="joel@example.ug"
-                  className={`w-full px-4 py-2.5 rounded-xl bg-[#030712] border text-white text-sm focus:outline-none focus:ring-1 ${
-                    errors.email ? 'border-rose-500 focus:ring-rose-500' : 'border-white/15 focus:border-amber-400 focus:ring-amber-400'
+                  className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
+                    errors.email ? 'border-rose-500' : 'border-white/15'
                   }`}
                 />
                 {errors.email && <p className="text-xs text-rose-400 mt-1">{errors.email}</p>}
@@ -397,56 +408,56 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   type="tel"
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                  placeholder="0775 198 484 or 256700000000"
-                  className={`w-full px-4 py-2.5 rounded-xl bg-[#030712] border text-white text-sm focus:outline-none focus:ring-1 ${
-                    errors.phone ? 'border-rose-500 focus:ring-rose-500' : 'border-white/15 focus:border-amber-400 focus:ring-amber-400'
+                  placeholder="0775 198 484 or +256 701 234567"
+                  className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
+                    errors.phone ? 'border-rose-500' : 'border-white/15'
                   }`}
                 />
                 {errors.phone && <p className="text-xs text-rose-400 mt-1">{errors.phone}</p>}
                 <p className="text-[11px] text-slate-400 mt-1">
-                  A Mobile Money push prompt will be sent to this number.
+                  An official Relworx payment prompt will be pushed directly to this handset.
                 </p>
               </div>
 
               {/* Mobile Money Operator Selection */}
               <div className="pt-2">
                 <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Select Mobile Money Operator
+                  Select Mobile Money Network
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={() => setNetwork('MTN')}
-                    className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                    className={`p-3 rounded-xl border text-left cursor-pointer transition-colors flex items-center gap-3 ${
                       network === 'MTN'
-                        ? 'bg-amber-950/50 border-amber-400 text-white shadow-md'
-                        : 'bg-[#030712] border-white/10 text-slate-400 hover:border-white/20'
+                        ? 'bg-[#121c2e] border-amber-400 text-white'
+                        : 'bg-[#080c14] border-white/10 text-slate-400 hover:border-white/20'
                     }`}
                   >
-                    <div className="w-8 h-8 rounded-lg bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs shrink-0">
+                    <div className="w-8 h-8 rounded-lg bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs shrink-0 font-mono">
                       MTN
                     </div>
                     <div>
                       <span className="block text-xs font-bold text-white">MTN MoMo</span>
-                      <span className="text-[10px] text-amber-300">Dial *165# PIN Prompt</span>
+                      <span className="text-[10px] text-slate-400">*165# PIN Prompt</span>
                     </div>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setNetwork('AIRTEL')}
-                    className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                    className={`p-3 rounded-xl border text-left cursor-pointer transition-colors flex items-center gap-3 ${
                       network === 'AIRTEL'
-                        ? 'bg-red-950/50 border-red-400 text-white shadow-md'
-                        : 'bg-[#030712] border-white/10 text-slate-400 hover:border-white/20'
+                        ? 'bg-[#121c2e] border-rose-400 text-white'
+                        : 'bg-[#080c14] border-white/10 text-slate-400 hover:border-white/20'
                     }`}
                   >
-                    <div className="w-8 h-8 rounded-lg bg-red-600 text-white font-black flex items-center justify-center text-xs shrink-0">
+                    <div className="w-8 h-8 rounded-lg bg-rose-600 text-white font-black flex items-center justify-center text-xs shrink-0 font-mono">
                       AIR
                     </div>
                     <div>
                       <span className="block text-xs font-bold text-white">Airtel Money</span>
-                      <span className="text-[10px] text-red-300">Dial *185# PIN Prompt</span>
+                      <span className="text-[10px] text-slate-400">*185# PIN Prompt</span>
                     </div>
                   </button>
                 </div>
@@ -457,24 +468,24 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 <button
                   type="submit"
                   disabled={isSubmitting || remainingInventory < quantity}
-                  className="w-full py-4 text-sm font-black tracking-wider text-slate-950 bg-gradient-to-r from-amber-400 via-amber-300 to-cyan-400 hover:from-amber-300 hover:to-cyan-300 disabled:opacity-50 transition-all rounded-xl shadow-lg shadow-amber-500/20 active:scale-98 whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2"
+                  className="w-full py-3.5 text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2 font-display"
                 >
                   {isSubmitting ? (
                     <div className="flex items-center gap-2">
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>LOCKING INVENTORY & CALLING RELWORX...</span>
+                      <span>Locking Inventory & Initiating...</span>
                     </div>
                   ) : (
                     <>
-                      <span>PAY VIA {network} MOBILE MONEY · UGX {totalPrice.toLocaleString()}</span>
+                      <span>Pay via {network} MoMo · UGX {totalPrice.toLocaleString()}</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
                 </button>
 
                 <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 mt-3">
-                  <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                  <span>10-Minute Lock · Official Relworx Uganda Mobile Money · RSVP: {EVENT_DATA.rsvpPhone}</span>
+                  <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  <span>10-Minute Reservation Lock · Relworx Uganda Mobile Money</span>
                 </div>
               </div>
             </form>

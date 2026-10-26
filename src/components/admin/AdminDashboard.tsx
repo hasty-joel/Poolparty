@@ -286,23 +286,23 @@ order by category;`;
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#030712] flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-[#070e1b] border-2 border-amber-400/40 rounded-3xl p-8 shadow-2xl text-center space-y-6">
-          <div className="w-16 h-16 rounded-2xl bg-amber-400/10 border border-amber-400/30 text-amber-400 flex items-center justify-center mx-auto">
-            <Lock className="w-8 h-8" />
+      <div className="min-h-screen bg-[#080c14] flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-2xl p-8 shadow-2xl text-center space-y-6">
+          <div className="w-12 h-12 rounded-xl bg-amber-400/10 border border-amber-400/20 text-amber-400 flex items-center justify-center mx-auto">
+            <Lock className="w-6 h-6" />
           </div>
 
           <div>
-            <h2 className="text-2xl font-black text-white font-display">
-              Pool Party Admin
+            <h2 className="text-xl font-bold text-white font-display">
+              Pool Party Staff Admin
             </h2>
             <p className="text-xs text-slate-400 mt-1">
-              70-Ticket Pre-allocated Inventory & Sales System · Prince Resort Bunamwaya
+              70-Ticket Inventory & Gate Management · Prince Resort Bunamwaya
             </p>
           </div>
 
           {authError && (
-            <div className="p-3 bg-rose-950/50 border border-rose-500/50 rounded-xl text-xs text-rose-300">
+            <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-lg text-xs text-rose-300">
               {authError}
             </div>
           )}
@@ -317,14 +317,14 @@ order by category;`;
                 value={passcode}
                 onChange={(e) => setPasscode(e.target.value)}
                 placeholder="Enter passcode (default: prince2026)"
-                className="w-full px-4 py-3 bg-[#030712] border border-white/20 rounded-xl text-white text-sm focus:outline-none focus:border-amber-400 font-mono"
+                className="w-full px-4 py-2.5 bg-[#080c14] border border-white/15 rounded-lg text-white text-sm focus:outline-none focus:border-amber-400 font-mono transition-colors"
                 autoFocus
               />
             </div>
 
             <button
               type="submit"
-              className="w-full py-3.5 bg-gradient-to-r from-amber-400 to-cyan-400 hover:from-amber-300 hover:to-cyan-300 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg active:scale-98 transition-all cursor-pointer"
+              className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
             >
               Sign In to Dashboard
             </button>
@@ -336,7 +336,7 @@ order by category;`;
               onClick={onBack}
               className="text-cyan-400 hover:underline cursor-pointer"
             >
-              Back to Public Website
+              Back to Website
             </button>
           </div>
         </div>
@@ -345,7 +345,7 @@ order by category;`;
   }
 
   return (
-    <div className="min-h-screen bg-[#030712] text-slate-100 p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-[#080c14] text-slate-100 p-4 sm:p-6 lg:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
         
         {/* Top Navbar */}
@@ -353,15 +353,15 @@ order by category;`;
           <div className="flex items-center gap-3">
             <button
               onClick={onBack}
-              className="p-2 bg-white/5 hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
+              className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
               title="Return to Public Website"
             >
               <ArrowLeft className="w-5 h-5 text-amber-400" />
             </button>
             <div>
               <div className="flex items-center gap-2">
-                <Crown className="w-5 h-5 text-amber-400" />
-                <h1 className="text-xl sm:text-2xl font-black text-white font-display">
+                <Crown className="w-4 h-4 text-amber-400" />
+                <h1 className="text-xl font-bold text-white font-display">
                   Pool Party Inventory & Sales Management
                 </h1>
               </div>
@@ -374,7 +374,7 @@ order by category;`;
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               onClick={onOpenGateScanner}
-              className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 text-slate-950 text-xs font-black rounded-xl flex items-center gap-1.5 shadow-sm uppercase cursor-pointer"
+              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm uppercase cursor-pointer transition-colors"
             >
               <QrCode className="w-4 h-4" />
               <span>Gate Verifier Scanner</span>
@@ -382,7 +382,7 @@ order by category;`;
 
             <button
               onClick={() => setActiveTab('physical_sale')}
-              className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black rounded-xl flex items-center gap-1.5 shadow-sm uppercase cursor-pointer"
+              className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm uppercase cursor-pointer transition-colors"
             >
               <Plus className="w-4 h-4" />
               <span>Record Physical Sale</span>
@@ -390,7 +390,7 @@ order by category;`;
 
             <button
               onClick={() => setIsAuthenticated(false)}
-              className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white text-xs font-bold rounded-xl border border-white/10 cursor-pointer"
+              className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white text-xs font-semibold rounded-lg border border-white/10 cursor-pointer transition-colors"
             >
               Sign Out
             </button>
@@ -399,14 +399,14 @@ order by category;`;
 
         {/* Action Success Alert */}
         {actionSuccess && (
-          <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-400 text-emerald-200 text-xs flex items-center gap-2 animate-fadeIn">
+          <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>{actionSuccess}</span>
           </div>
         )}
 
         {/* Database & Payment Gateway Status Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl bg-[#070e1b] border border-white/10 text-xs gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 rounded-xl bg-[#0d1522] border border-white/10 text-xs gap-2">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-1.5">
               <Database className="w-4 h-4 text-cyan-400" />
@@ -415,7 +415,7 @@ order by category;`;
                 {healthData?.supabaseConnected ? (
                   <strong className="text-emerald-400">Connected to Supabase Poolparty</strong>
                 ) : (
-                  <strong className="text-amber-300">Synchronized (Supabase 70-Ticket Schema)</strong>
+                  <strong className="text-amber-300">Synchronized (In-Memory Fallback Active)</strong>
                 )}
               </span>
             </div>
@@ -425,15 +425,11 @@ order by category;`;
             <div className="flex items-center gap-1.5">
               <Smartphone className="w-4 h-4 text-amber-400" />
               <span>
-                Flutterwave:{' '}
-                {healthData?.flutterwaveConfigured ? (
-                  healthData?.flutterwaveTestMode ? (
-                    <strong className="text-amber-300">Connected (Test Sandbox Mode)</strong>
-                  ) : (
-                    <strong className="text-emerald-400">Live Production Active</strong>
-                  )
+                Relworx Gateway:{' '}
+                {healthData?.relworxConfigured ? (
+                  <strong className="text-emerald-400">Live Production Active</strong>
                 ) : (
-                  <strong className="text-slate-400">Key Pending in .env (Test Mode)</strong>
+                  <strong className="text-amber-300">Sandbox Simulation Active</strong>
                 )}
               </span>
             </div>
@@ -443,7 +439,7 @@ order by category;`;
             onClick={() => setActiveTab('setup_guide')}
             className="text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer shrink-0"
           >
-            <span>Setup & Credentials Guide</span>
+            <span>Credentials & Setup Guide</span>
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -788,7 +784,7 @@ order by category;`;
               <div>
                 <h3 className="text-base font-bold text-white font-display flex items-center gap-2">
                   <Smartphone className="w-5 h-5 text-amber-400" />
-                  <span>Flutterwave Uganda Orders & Transactions</span>
+                  <span>Relworx Mobile Money Transactions & Orders</span>
                 </h3>
                 <p className="text-xs text-slate-400">
                   Real-time transaction log. 10-minute reservations expire automatically if unpaid.

@@ -13,7 +13,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  FlaskConical
 } from 'lucide-react';
 import { TicketService } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
@@ -53,6 +54,17 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [copiedRef, setCopiedRef] = useState(false);
   const [manualChecking, setManualChecking] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const [isSandboxMode, setIsSandboxMode] = useState(false);
+
+  // Check admin health to determine if live Relworx or sandbox mode is active
+  useEffect(() => {
+    TicketService.checkAdminHealth().then((health) => {
+      setIsSandboxMode(!health.relworxConfigured);
+    }).catch(() => {
+      setIsSandboxMode(true);
+    });
+  }, []);
 
   // Countdown timer for 10-minute reservation expiry
   useEffect(() => {
@@ -114,7 +126,6 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
     const pollInterval = setInterval(() => {
       pollCount++;
       if (pollCount > 170) {
-        // Stop polling after 10 minutes
         clearInterval(pollInterval);
         return;
       }
@@ -173,6 +184,25 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
     }
   };
 
+  const handleSimulateSandboxApproval = async () => {
+    if (!orderRef) return;
+    setSimulating(true);
+    try {
+      const res = await TicketService.simulateSandboxPaymentSuccess(orderRef);
+      if (res.success && res.status === 'paid' && res.tickets) {
+        setStatus('paid');
+        setIssuedTickets(res.tickets);
+        if (onPaymentSuccess) onPaymentSuccess();
+      } else {
+        setMessage(res.message || 'Simulation response received.');
+      }
+    } catch (err: any) {
+      setMessage('Simulation error: ' + err?.message);
+    } finally {
+      setSimulating(false);
+    }
+  };
+
   const handleDownloadPdf = async () => {
     if (!activeTicket) return;
     setDownloadingPdf(true);
@@ -195,13 +225,12 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
   };
 
   const handleDownloadAllPdf = async () => {
+    if (issuedTickets.length === 0) return;
     setDownloadingPdf(true);
     try {
-      for (const t of issuedTickets) {
-        await TicketRenderer.generatePdfTicket(t);
-      }
+      await TicketRenderer.downloadAllTicketsPdf(issuedTickets);
     } catch (err) {
-      alert('Error: ' + err);
+      alert('Error downloading tickets: ' + err);
     } finally {
       setDownloadingPdf(false);
     }
@@ -226,29 +255,29 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
   const shareWhatsApp = () => {
     if (!activeTicket) return;
     const text = encodeURIComponent(
-      `🎉 My Pool Party 2026 Ticket is Confirmed!\n\nTicket: #${activeTicket.ticket_number} (${activeTicket.category} Pass)\nGuest: ${activeTicket.buyer_name}\nDate: Friday, 11 December 2026\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\n\nVerify Entry: ${verifyUrl}`
+      `My Pool Party 2026 Ticket is confirmed!\n\nPass #${activeTicket.ticket_number} (${activeTicket.category} Pass)\nGuest: ${activeTicket.buyer_name}\nDate: Friday, 11 December 2026\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\n\nVerify Entry: ${verifyUrl}`
     );
     window.open(`https://wa.me/?text=${text}`, '_blank');
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto bg-black/90 backdrop-blur-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto bg-black/80 backdrop-blur-sm">
       <div 
-        className="relative w-full max-w-3xl bg-[#070e1b] border-2 border-amber-400/50 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col"
+        className="relative w-full max-w-3xl bg-[#0d1522] border border-white/15 rounded-2xl shadow-2xl overflow-hidden my-6 flex flex-col"
         role="dialog"
       >
         {/* Modal Top Bar */}
-        <div className="flex items-center justify-between px-6 py-4 bg-[#030712] border-b border-white/10 shrink-0">
-          <div className="flex items-center gap-2">
-            <Ticket className="w-5 h-5 text-amber-400" />
-            <span className="text-sm sm:text-base font-bold text-white font-display">
-              {status === 'paid' ? 'Ticket Confirmed & Issued' : 'Relworx Uganda Mobile Money Payment'}
-            </span>
+        <div className="flex items-center justify-between px-6 py-4 bg-[#080c14] border-b border-white/10 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <Ticket className="w-4 h-4 text-amber-400" />
+            <h3 className="text-sm sm:text-base font-bold text-white font-display">
+              {status === 'paid' ? 'Ticket Confirmed & Issued' : 'Relworx Mobile Money Payment'}
+            </h3>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -262,93 +291,117 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
           {/* STATE 1: PENDING PAYMENT (USSD Prompt on Handset) */}
           {/* ==================================================== */}
           {status === 'pending' && (
-            <div className="space-y-6">
-              {/* Timer & Status Ribbon */}
-              <div className="p-4 rounded-2xl bg-amber-950/30 border border-amber-400/40 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="space-y-5">
+              {/* Timer Ribbon */}
+              <div className="p-4 rounded-xl bg-[#080c14] border border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center shrink-0">
-                    <Clock className="w-5 h-5 text-amber-400 animate-pulse" />
+                  <div className="w-9 h-9 rounded-lg bg-amber-400/10 border border-amber-400/20 flex items-center justify-center shrink-0">
+                    <Clock className="w-4 h-4 text-amber-400" />
                   </div>
                   <div>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300 block">
-                      10-Minute Stock Reservation Active
+                    <span className="text-xs font-bold text-white block">
+                      10-Minute Ticket Reservation Active
                     </span>
-                    <span className="text-xs text-slate-300">
-                      Your tickets are locked. Authorize the prompt before expiry.
+                    <span className="text-[11px] text-slate-400">
+                      Inventory locked. Approve the mobile money prompt to issue your ticket.
                     </span>
                   </div>
                 </div>
 
-                <div className="px-4 py-2 bg-[#030712] rounded-xl border border-amber-400/30 font-mono font-black text-amber-300 text-lg sm:text-xl">
+                <div className="px-3.5 py-1.5 bg-[#0d1522] rounded-lg border border-white/10 font-mono font-bold text-amber-300 text-lg tabular-nums">
                   {formatTimer(secondsRemaining)}
                 </div>
               </div>
 
               {/* Handset Instructions */}
-              <div className="bg-[#030712] p-6 rounded-2xl border border-white/10 space-y-4">
+              <div className="bg-[#080c14] p-5 rounded-xl border border-white/10 space-y-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-950/60 border border-emerald-500/40 flex items-center justify-center shrink-0">
-                    <Smartphone className="w-5 h-5 text-emerald-400 animate-bounce" />
+                  <div className="w-9 h-9 rounded-lg bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                    <Smartphone className="w-4 h-4 text-emerald-400" />
                   </div>
                   <div>
-                    <h4 className="text-base font-bold text-white">
-                      Check Your {network} Handset
+                    <h4 className="text-sm font-bold text-white">
+                      Check Your {network} Phone Screen
                     </h4>
                     <p className="text-xs text-slate-400">
                       Relworx sent an official Mobile Money prompt to{' '}
-                      <strong className="text-amber-300">{buyerPhone || 'your phone'}</strong>.
+                      <strong className="text-white font-mono">{buyerPhone || 'your handset'}</strong>.
                     </p>
                   </div>
                 </div>
 
                 {/* Amount to pay */}
-                <div className="bg-[#070e1b] p-4 rounded-xl border border-white/10 flex items-center justify-between">
+                <div className="bg-[#0d1522] p-4 rounded-lg border border-white/5 flex items-center justify-between">
                   <div>
                     <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-                      Total Due (Enforced by Server)
+                      Total Amount
                     </span>
-                    <span className="text-xl font-black text-white font-mono">
+                    <span className="text-xl font-bold text-white font-mono tabular-nums">
                       UGX {totalAmountUgx?.toLocaleString()}
                     </span>
                   </div>
                   <div className="text-right">
                     <span className="text-[10px] text-slate-400 uppercase tracking-wider block">
-                      Payment Reference
+                      Order Reference
                     </span>
-                    <span className="text-xs font-mono text-cyan-300 flex items-center gap-1">
+                    <span className="text-xs font-mono text-cyan-300 flex items-center gap-1.5">
                       {orderRef}
-                      <button onClick={copyOrderRef} className="hover:text-white p-0.5">
-                        {copiedRef ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <button onClick={copyOrderRef} className="hover:text-white p-0.5 cursor-pointer" title="Copy reference">
+                        {copiedRef ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                       </button>
                     </span>
                   </div>
                 </div>
 
-                {/* Step by step prompt instructions */}
-                <ol className="text-xs text-slate-300 space-y-2 list-decimal list-inside bg-black/40 p-4 rounded-xl">
-                  <li>Keep your phone screen on and unlocked.</li>
-                  <li>Enter your {network === 'MTN' ? 'MTN MoMo' : 'Airtel Money'} PIN to confirm payment.</li>
+                {/* Instructions */}
+                <ol className="text-xs text-slate-300 space-y-1.5 list-decimal list-inside p-3 bg-black/20 rounded-lg">
+                  <li>Unlock your phone and enter your {network === 'MTN' ? 'MTN MoMo' : 'Airtel Money'} PIN.</li>
                   <li>
                     {network === 'MTN' ? (
-                      <span>If the prompt did not pop up, dial <strong className="text-amber-300 font-mono">*165#</strong> &gt; Pending Approvals.</span>
+                      <span>If no prompt appeared, dial <strong className="text-amber-300 font-mono">*165#</strong> &gt; Pending Approvals.</span>
                     ) : (
-                      <span>If the prompt did not pop up, dial <strong className="text-amber-300 font-mono">*185#</strong> &gt; Pending Approvals.</span>
+                      <span>If no prompt appeared, dial <strong className="text-amber-300 font-mono">*185#</strong> &gt; Pending Approvals.</span>
                     )}
                   </li>
-                  <li>Once approved on your phone, this screen will automatically confirm and download your tickets.</li>
+                  <li>Once authorized, this screen updates immediately and issues your personalized pass.</li>
                 </ol>
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              {/* Status Action Button */}
+              <div className="space-y-3 pt-1">
                 <button
                   onClick={handleManualCheck}
                   disabled={manualChecking}
-                  className="flex-1 py-3.5 bg-gradient-to-r from-amber-400 to-amber-300 hover:from-amber-300 hover:to-amber-200 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  className="w-full py-3 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
                 >
-                  <RefreshCw className={`w-4 h-4 ${manualChecking ? 'animate-spin' : ''}`} />
-                  <span>{manualChecking ? 'Checking Relworx...' : 'I Approved on My Phone · Check Status'}</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${manualChecking ? 'animate-spin' : ''}`} />
+                  <span>{manualChecking ? 'Verifying with Relworx...' : 'I Approved on My Phone · Check Status'}</span>
                 </button>
+
+                {/* Clearly Labeled Sandbox Simulation Section (Test QA only) */}
+                {isSandboxMode && (
+                  <div className="p-3.5 bg-[#080c14] border border-amber-400/20 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-amber-300 font-semibold flex items-center gap-1.5">
+                        <FlaskConical className="w-3.5 h-3.5" />
+                        Sandbox Testing Simulation
+                      </span>
+                      <span className="text-[10px] uppercase font-mono text-slate-500">RELWORX_API_KEY unset</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      This system is operating in developer sandbox simulation mode. You can simulate the handset PIN authorization to verify ticket generation and gate scanning.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleSimulateSandboxApproval}
+                      disabled={simulating}
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 border border-amber-400/30 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                    >
+                      {simulating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                      <span>{simulating ? 'Simulating...' : 'Simulate Handset Approval (Sandbox QA Test)'}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -357,42 +410,44 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
           {/* STATE 2: PAID (TICKETS ISSUED WITH PERSONALIZED CANVA) */}
           {/* ==================================================== */}
           {status === 'paid' && (
-            <div className="space-y-6">
-              {/* Success Banner */}
-              <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/50 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center shrink-0">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+            <div className="space-y-5">
+              {/* Clean Success Banner */}
+              <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-emerald-500/20 flex items-center justify-center shrink-0">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white font-display">
-                    Payment Confirmed by Relworx!
+                  <h4 className="text-sm font-bold text-white font-display">
+                    Payment Verified Successfully
                   </h4>
-                  <p className="text-xs text-emerald-200">
-                    Your {issuedTickets.length} personalized pass(es) have been issued and cryptographically signed.
+                  <p className="text-xs text-emerald-300">
+                    {issuedTickets.length} personalized pass(es) issued with verified cryptographic entry tokens.
                   </p>
                 </div>
               </div>
 
               {/* Multi-Ticket Navigation (if buyer bought more than 1 ticket) */}
               {issuedTickets.length > 1 && (
-                <div className="flex items-center justify-between bg-[#030712] p-3 rounded-xl border border-white/10 text-xs">
-                  <span className="text-slate-300 font-semibold">
-                    Ticket {currentTicketIndex + 1} of {issuedTickets.length}:{' '}
+                <div className="flex items-center justify-between bg-[#080c14] p-3 rounded-lg border border-white/10 text-xs">
+                  <span className="text-slate-300 font-medium">
+                    Showing Ticket {currentTicketIndex + 1} of {issuedTickets.length}:{' '}
                     <strong className="text-amber-300 font-mono">{activeTicket?.ticket_number}</strong>
                   </span>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setCurrentTicketIndex((prev) => Math.max(0, prev - 1))}
                       disabled={currentTicketIndex === 0}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white cursor-pointer"
+                      className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white cursor-pointer"
+                      title="Previous ticket"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => setCurrentTicketIndex((prev) => Math.min(issuedTickets.length - 1, prev + 1))}
                       disabled={currentTicketIndex === issuedTickets.length - 1}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white cursor-pointer"
+                      className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white cursor-pointer"
+                      title="Next ticket"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </button>
@@ -401,48 +456,48 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
               )}
 
               {/* Canva Ticket Preview */}
-              <div className="bg-[#02050b] p-4 rounded-2xl border border-amber-400/30 flex flex-col items-center justify-center min-h-[220px]">
+              <div className="bg-[#080c14] p-4 rounded-xl border border-white/10 flex flex-col items-center justify-center min-h-[200px]">
                 {renderingCanvas ? (
-                  <div className="flex flex-col items-center gap-2 text-xs text-amber-300 py-10">
-                    <RefreshCw className="w-6 h-6 animate-spin text-amber-400" />
-                    <span>Overlaying attendee name & QR code on Canva template...</span>
+                  <div className="flex flex-col items-center gap-2 text-xs text-amber-300 py-8">
+                    <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
+                    <span>Rendering personalized Canva pass...</span>
                   </div>
                 ) : renderedCanvasUrl ? (
                   <div className="w-full flex flex-col items-center">
                     <img
                       src={renderedCanvasUrl}
                       alt={`Ticket ${activeTicket?.ticket_number}`}
-                      className="w-full max-w-2xl h-auto rounded-lg shadow-2xl border border-amber-400/40 object-contain"
+                      className="w-full max-w-2xl h-auto rounded-lg border border-white/15 object-contain shadow-lg"
                     />
-                    <div className="mt-3 text-center text-xs text-slate-400">
-                      Ticket ID: <span className="font-mono text-cyan-300 font-bold">{activeTicket?.ticket_number}</span> · Guest:{' '}
+                    <div className="mt-2.5 text-center text-xs text-slate-400">
+                      Pass Number: <span className="font-mono text-cyan-300 font-bold">{activeTicket?.ticket_number}</span> · Guest:{' '}
                       <span className="text-white font-medium">{activeTicket?.buyer_name}</span>
                     </div>
                   </div>
                 ) : (
-                  <p className="text-xs text-rose-400">Could not render ticket image.</p>
+                  <p className="text-xs text-rose-400">Could not render ticket canvas.</p>
                 )}
               </div>
 
               {/* Action Buttons */}
-              <div className="space-y-3 pt-2">
+              <div className="space-y-3 pt-1">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     onClick={handleDownloadPdf}
                     disabled={downloadingPdf || renderingCanvas}
-                    className="py-3 px-4 bg-gradient-to-r from-amber-400 to-amber-300 hover:from-amber-300 hover:to-amber-200 text-slate-950 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm uppercase cursor-pointer"
+                    className="py-3 px-4 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm uppercase cursor-pointer"
                   >
                     <Download className="w-4 h-4" />
-                    <span>{downloadingPdf ? 'Generating PDF...' : 'Download Print-Ready PDF'}</span>
+                    <span>{downloadingPdf ? 'Generating PDF...' : 'Download Print PDF'}</span>
                   </button>
 
                   <button
                     onClick={handleDownloadPng}
                     disabled={renderingCanvas}
-                    className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 border border-white/10 uppercase cursor-pointer"
+                    className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 border border-slate-700 uppercase cursor-pointer"
                   >
-                    <Download className="w-4 h-4" />
-                    <span>Download High-Res PNG</span>
+                    <Download className="w-4 h-4 text-slate-300" />
+                    <span>Download PNG Image</span>
                   </button>
                 </div>
 
@@ -450,10 +505,10 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
                   <button
                     onClick={handleDownloadAllPdf}
                     disabled={downloadingPdf}
-                    className="w-full py-2.5 bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-500/40 text-cyan-200 text-xs font-bold rounded-xl flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-bold rounded-lg flex items-center justify-center gap-2 cursor-pointer transition-colors"
                   >
                     <Download className="w-4 h-4" />
-                    <span>Download All {issuedTickets.length} Tickets (All PDFs)</span>
+                    <span>Download All {issuedTickets.length} Passes (Combined PDF)</span>
                   </button>
                 )}
 
@@ -462,12 +517,12 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
                     onClick={shareWhatsApp}
                     className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1.5 font-semibold cursor-pointer"
                   >
-                    <Share2 className="w-4 h-4" />
+                    <Share2 className="w-3.5 h-3.5" />
                     <span>Share on WhatsApp</span>
                   </button>
 
-                  <span className="text-[11px] text-slate-500">
-                    Ref: <span className="font-mono">{orderRef}</span>
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    Order Ref: {orderRef}
                   </span>
                 </div>
               </div>
@@ -478,21 +533,21 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
           {/* STATE 3: EXPIRED RESERVATION */}
           {/* ==================================================== */}
           {status === 'expired' && (
-            <div className="p-6 bg-[#030712] rounded-2xl border border-rose-500/40 text-center space-y-4">
-              <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto">
-                <AlertCircle className="w-6 h-6" />
+            <div className="p-6 bg-[#080c14] rounded-xl border border-rose-500/30 text-center space-y-4">
+              <div className="w-10 h-10 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto">
+                <AlertCircle className="w-5 h-5" />
               </div>
-              <h4 className="text-lg font-bold text-white font-display">
+              <h4 className="text-base font-bold text-white font-display">
                 Reservation Expired
               </h4>
-              <p className="text-xs text-slate-300 max-w-md mx-auto">
-                The 10-minute mobile money window elapsed without confirmation. To avoid overselling, your reserved ticket was returned to available stock.
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                The 10-minute payment window elapsed without confirmation. To avoid overselling the 70-ticket venue capacity, your ticket was returned to inventory.
               </p>
               <button
                 onClick={onClose}
-                className="px-6 py-2.5 bg-amber-400 text-slate-950 text-xs font-bold rounded-xl cursor-pointer hover:bg-amber-300 uppercase"
+                className="px-5 py-2.5 bg-amber-400 text-slate-950 text-xs font-bold rounded-lg cursor-pointer hover:bg-amber-300 uppercase"
               >
-                Start New Reservation
+                Select New Pass
               </button>
             </div>
           )}
@@ -501,19 +556,19 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
           {/* STATE 4: FAILED OR CANCELLED */}
           {/* ==================================================== */}
           {status === 'failed' && (
-            <div className="p-6 bg-[#030712] rounded-2xl border border-rose-500/40 text-center space-y-4">
-              <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto">
-                <AlertCircle className="w-6 h-6" />
+            <div className="p-6 bg-[#080c14] rounded-xl border border-rose-500/30 text-center space-y-4">
+              <div className="w-10 h-10 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto">
+                <AlertCircle className="w-5 h-5" />
               </div>
-              <h4 className="text-lg font-bold text-white font-display">
-                Payment Declined
+              <h4 className="text-base font-bold text-white font-display">
+                Payment Prompt Declined or Cancelled
               </h4>
-              <p className="text-xs text-slate-300 max-w-md mx-auto">
-                {message || 'The payment could not be processed by your mobile money operator. Please check your balance and try again.'}
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                {message || 'The transaction was declined by the mobile money network. Please verify your account balance and retry.'}
               </p>
               <button
                 onClick={onClose}
-                className="px-6 py-2.5 bg-amber-400 text-slate-950 text-xs font-bold rounded-xl cursor-pointer hover:bg-amber-300 uppercase"
+                className="px-5 py-2.5 bg-amber-400 text-slate-950 text-xs font-bold rounded-lg cursor-pointer hover:bg-amber-300 uppercase"
               >
                 Try Again
               </button>

@@ -17,13 +17,14 @@ export const TicketRenderer = {
     const fallbackUrl = isVip ? '/public/assets/aistudio/2_c9323f09.jpg' : '/public/assets/aistudio/1_d9ab832d.jpg';
 
     // 1. Generate QR Code using the secure unguessable qr_token UUID
-    const verificationUrl = `${window.location.origin}?verify=${ticket.qr_token}`;
+    // The gate scanner verifies ?verify=<qr_token>
+    const verificationUrl = `${window.location.origin}?verify=${encodeURIComponent(ticket.qr_token)}`;
     const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
       errorCorrectionLevel: 'H',
       margin: 1,
-      width: 400,
+      width: 500,
       color: {
-        dark: '#030712',
+        dark: '#050b14',
         light: '#ffffff',
       },
     });
@@ -34,7 +35,6 @@ export const TicketRenderer = {
       img.crossOrigin = 'anonymous';
       img.onload = () => resolve(img);
       img.onerror = () => {
-        // Try fallback URL if primary fails
         const fallback = new Image();
         fallback.crossOrigin = 'anonymous';
         fallback.onload = () => resolve(fallback);
@@ -52,106 +52,156 @@ export const TicketRenderer = {
       img.src = qrDataUrl;
     });
 
-    // 4. Create and configure high-DPI canvas
+    // 4. Create canvas at native template resolution (2000 x 647)
     const canvas = document.createElement('canvas');
-    const width = bgImage.naturalWidth || 1000;
-    const height = bgImage.naturalHeight || 333;
+    const width = bgImage.naturalWidth || 2000;
+    const height = bgImage.naturalHeight || 647;
     canvas.width = width;
     canvas.height = height;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Could not get 2D canvas context');
 
-    // Draw background Canva template
+    // Draw pristine background Canva template
     ctx.drawImage(bgImage, 0, 0, width, height);
 
-    const guestName = ticket.buyer_name || 'Guest Pass Holder';
+    const guestName = (ticket.buyer_name || 'Guest Pass Holder').trim();
 
     if (isVip) {
-      // VIP Template Layout (2_c9323f09.jpg):
-      // QR White square is at the top right stub
+      // ========================================================
+      // VIP Template Layout (2_c9323f09.jpg - 2000 x 647)
+      // ========================================================
+
+      // 1. White QR placeholder box is at the top right of the stub
+      // x: ~1624 (81.2%), y: ~77 (11.9%), w: ~292 (14.6%), h: ~305 (47.1%)
       const qrX = width * 0.812;
-      const qrY = height * 0.125;
+      const qrY = height * 0.119;
       const qrW = width * 0.146;
-      const qrH = height * 0.455;
+      const qrH = height * 0.471;
+      const qrPadding = 8;
 
-      // Draw QR into white placeholder box
-      ctx.drawImage(qrImage, qrX, qrY, qrW, qrH);
-
-      // Mask and overlay dynamic Ticket ID & Guest Name in bottom right box
-      const textX = width * 0.805;
-      
-      // Clean background for Ticket ID
-      ctx.fillStyle = '#06101d';
-      ctx.fillRect(textX + width * 0.058, height * 0.73, width * 0.13, height * 0.08);
-      // Clean background for Guest Name
-      ctx.fillRect(textX + width * 0.075, height * 0.815, width * 0.115, height * 0.08);
-
-      // Render actual dynamic text (e.g. VIP-001)
-      ctx.font = `bold ${Math.round(height * 0.048)}px "Plus Jakarta Sans", sans-serif`;
-      ctx.fillStyle = '#38bdf8';
-      ctx.fillText(ticket.ticket_number, textX + width * 0.06, height * 0.79);
-
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(
-        guestName.length > 18 ? guestName.substring(0, 16) + '...' : guestName,
-        textX + width * 0.075,
-        height * 0.875
+      ctx.drawImage(
+        qrImage,
+        qrX + qrPadding,
+        qrY + qrPadding,
+        qrW - qrPadding * 2,
+        qrH - qrPadding * 2
       );
+
+      // 2. Overlay Ticket ID in the designated section below "SCAN FOR ENTRY"
+      // Mask the "[UNIQUE TICKET ID]" placeholder cleanly with the dark stub background
+      ctx.fillStyle = '#040a16';
+      ctx.fillRect(width * 0.875, height * 0.745, width * 0.105, height * 0.055);
+
+      // Render actual dynamic Ticket ID (e.g. VIP-001)
+      ctx.font = `bold ${Math.round(height * 0.042)}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+      ctx.fillStyle = '#00e5ff';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ticket.ticket_number, width * 0.876, height * 0.772);
+
+      // 3. Overlay Guest Name
+      // Mask the "[GUEST NAME]" placeholder
+      ctx.fillStyle = '#040a16';
+      ctx.fillRect(width * 0.880, height * 0.825, width * 0.102, height * 0.055);
+
+      // Render actual Attendee Name
+      ctx.font = `600 ${Math.round(height * 0.038)}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      const truncatedVipName = guestName.length > 18 ? guestName.substring(0, 16) + '...' : guestName;
+      ctx.fillText(truncatedVipName, width * 0.881, height * 0.852);
+
     } else {
-      // Ordinary Template Layout (1_d9ab832d.jpg):
-      // QR White square is in the middle of the stub
-      const qrX = width * 0.668;
-      const qrY = height * 0.465;
-      const qrW = width * 0.131;
-      const qrH = height * 0.395;
+      // ========================================================
+      // Ordinary Template Layout (1_d9ab832d.jpg - 2000 x 647)
+      // ========================================================
 
-      // Draw QR into white placeholder box
-      ctx.drawImage(qrImage, qrX, qrY, qrW, qrH);
+      // 1. White QR placeholder box is at bottom left of the stub
+      // x: ~1335 (66.75%), y: ~300 (46.3%), w: ~265 (13.25%), h: ~255 (39.4%)
+      const qrX = width * 0.6675;
+      const qrY = height * 0.463;
+      const qrW = width * 0.1325;
+      const qrH = height * 0.394;
+      const qrPadding = 6;
 
-      // Clean background for Ticket ID on right side of QR box
-      const infoBoxX = width * 0.825;
-      ctx.fillStyle = '#07101b';
-      ctx.fillRect(infoBoxX + width * 0.055, height * 0.525, width * 0.11, height * 0.075);
-      // Clean background for Guest Name
-      ctx.fillRect(infoBoxX + width * 0.075, height * 0.665, width * 0.09, height * 0.075);
-
-      // Render actual dynamic text (e.g. ORD-001)
-      ctx.font = `bold ${Math.round(height * 0.044)}px "Plus Jakarta Sans", sans-serif`;
-      ctx.fillStyle = '#38bdf8';
-      ctx.fillText(ticket.ticket_number, infoBoxX + width * 0.058, height * 0.585);
-
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(
-        guestName.length > 16 ? guestName.substring(0, 14) + '...' : guestName,
-        infoBoxX + width * 0.078,
-        height * 0.725
+      ctx.drawImage(
+        qrImage,
+        qrX + qrPadding,
+        qrY + qrPadding,
+        qrW - qrPadding * 2,
+        qrH - qrPadding * 2
       );
+
+      // 2. Info box is to the right of the QR code
+      // Mask the "[UNIQUE TICKET ID]" placeholder inside the rounded card
+      ctx.fillStyle = '#07101b';
+      ctx.fillRect(width * 0.860, height * 0.525, width * 0.115, height * 0.065);
+
+      // Render actual dynamic Ticket ID (e.g. ORD-001)
+      ctx.font = `bold ${Math.round(height * 0.040)}px "Outfit", "Plus Jakarta Sans", sans-serif`;
+      ctx.fillStyle = '#38bdf8';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ticket.ticket_number, width * 0.862, height * 0.558);
+
+      // 3. Mask the "[GUEST NAME]" placeholder inside the rounded card
+      ctx.fillStyle = '#07101b';
+      ctx.fillRect(width * 0.860, height * 0.675, width * 0.115, height * 0.065);
+
+      // Render actual Attendee Name
+      ctx.font = `600 ${Math.round(height * 0.036)}px "Plus Jakarta Sans", sans-serif`;
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      const truncatedOrdName = guestName.length > 17 ? guestName.substring(0, 15) + '...' : guestName;
+      ctx.fillText(truncatedOrdName, width * 0.862, height * 0.708);
     }
 
     return canvas;
   },
 
   /**
-   * Generates a downloadable personalized print-ready PDF
+   * Generates a downloadable personalized print-ready PDF (Single Ticket)
    */
   async generatePdfTicket(ticket: TicketRecord): Promise<void> {
     const canvas = await this.renderTicketToCanvas(ticket);
     const imgData = canvas.toDataURL('image/jpeg', 0.95);
 
-    // Standard landscape ticket size (210mm x 70mm, 3:1 ratio matching the Canva poster design)
+    // Standard landscape voucher ticket size: 210mm x 68mm (~3.09:1 ratio matching the 2000x647 artwork)
     const pdf = new jsPDF({
       orientation: 'landscape',
       unit: 'mm',
-      format: [210, 70],
+      format: [210, 68],
     });
 
-    pdf.addImage(imgData, 'JPEG', 0, 0, 210, 70);
+    pdf.addImage(imgData, 'JPEG', 0, 0, 210, 68);
     pdf.save(`Pool_Party_2026_${ticket.category}_${ticket.ticket_number}.pdf`);
   },
 
   /**
-   * Download image directly as PNG
+   * Generates a single multi-page PDF containing all purchased tickets
+   */
+  async downloadAllTicketsPdf(tickets: TicketRecord[]): Promise<void> {
+    if (tickets.length === 0) return;
+
+    const pdf = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: [210, 68],
+    });
+
+    for (let i = 0; i < tickets.length; i++) {
+      if (i > 0) {
+        pdf.addPage([210, 68], 'landscape');
+      }
+      const canvas = await this.renderTicketToCanvas(tickets[i]);
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      pdf.addImage(imgData, 'JPEG', 0, 0, 210, 68);
+    }
+
+    pdf.save(`Pool_Party_2026_All_${tickets.length}_Tickets.pdf`);
+  },
+
+  /**
+   * Download ticket directly as high-resolution PNG
    */
   async downloadTicketImage(ticket: TicketRecord): Promise<void> {
     const canvas = await this.renderTicketToCanvas(ticket);

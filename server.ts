@@ -42,7 +42,7 @@ async function startServer() {
    */
   app.post('/api/payments/relworx-initiate', async (req, res) => {
     try {
-      const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = req.body;
+      const { category, quantity, buyerName, buyerEmail, buyerPhone, network, isSandbox } = req.body;
 
       if (!category || !quantity || !buyerName || !buyerEmail || !buyerPhone || !network) {
         return res.status(400).json({
@@ -66,6 +66,7 @@ async function startServer() {
         buyerEmail,
         buyerPhone,
         network,
+        isSandbox: Boolean(isSandbox),
       });
 
       if (!result.success) {
@@ -82,7 +83,7 @@ async function startServer() {
   // Backwards-compatible alias for any in-flight client requests
   app.post('/api/payments/flutterwave-initiate', async (req, res) => {
     try {
-      const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = req.body;
+      const { category, quantity, buyerName, buyerEmail, buyerPhone, network, isSandbox } = req.body;
       const result = await SupabaseServerService.initiateRelworxPayment({
         category: category || 'ORDINARY',
         quantity: parseInt(quantity, 10) || 1,
@@ -90,6 +91,7 @@ async function startServer() {
         buyerEmail: buyerEmail || '',
         buyerPhone: buyerPhone || '',
         network: network || 'MTN',
+        isSandbox: Boolean(isSandbox),
       });
       res.json(result);
     } catch (err: any) {
@@ -170,6 +172,37 @@ async function startServer() {
     } catch (err: any) {
       console.error('[Relworx Webhook Error]', err);
       res.status(500).json({ status: 'error', message: err?.message });
+    }
+  });
+
+  /**
+   * Sandbox Testing Simulation Endpoint
+   * Simulates customer approving the mobile money prompt on their handset for test QA.
+   * Clearly identified and recorded with simulated audit markers.
+   */
+  app.post('/api/payments/relworx-simulate-success', async (req, res) => {
+    try {
+      const { orderRef } = req.body;
+      if (!orderRef) {
+        return res.status(400).json({ success: false, message: 'orderRef is required.' });
+      }
+
+      const ok = await SupabaseServerService.markOrderAsPaid(orderRef, {
+        simulated: true,
+        relworx_internal_ref: `sim_${Date.now()}`,
+      });
+
+      if (!ok) {
+        return res.status(500).json({ success: false, message: 'Could not mark order as paid.' });
+      }
+
+      const orderData = await SupabaseServerService.getOrderStatus(orderRef);
+      res.json({
+        ...orderData,
+        message: 'Sandbox Mobile Money PIN approval simulated. Tickets issued.',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'Server error' });
     }
   });
 

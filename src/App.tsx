@@ -51,7 +51,7 @@ export default function App() {
   // If Admin View is active
   if (currentView === 'admin') {
     return (
-      <div className="min-h-screen bg-[#030712] text-slate-100 selection:bg-amber-400/30 selection:text-amber-200">
+      <div className="min-h-screen bg-[#080c14] text-slate-100 selection:bg-amber-400/30 selection:text-amber-200">
         <AdminDashboard
           onBack={() => setCurrentView('public')}
           onOpenGateScanner={() => setCurrentView('scanner')}
@@ -69,7 +69,7 @@ export default function App() {
   // If Gate Scanner View is active
   if (currentView === 'scanner') {
     return (
-      <div className="min-h-screen bg-[#030712] text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200">
+      <div className="min-h-screen bg-[#080c14] text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200">
         <GateScanner
           onBack={() => setCurrentView('public')}
           onViewTicket={(ticket) => setActiveTicket(ticket)}
@@ -85,7 +85,7 @@ export default function App() {
 
   // Public Event Website View
   return (
-    <div className="min-h-screen bg-[#030712] text-slate-100 water-reflection-grid selection:bg-amber-400/30 selection:text-amber-200">
+    <div className="min-h-screen bg-[#080c14] text-slate-100 selection:bg-amber-400/30 selection:text-amber-200">
       {/* Navigation Bar with Admin & Scanner Triggers */}
       <Navbar
         onTicketClick={scrollToTickets}

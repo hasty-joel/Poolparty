@@ -319,6 +319,7 @@ export const SupabaseServerService = {
     buyerEmail: string;
     buyerPhone: string;
     network: PaymentNetwork;
+    isSandbox?: boolean;
   }): Promise<{
     success: boolean;
     orderRef?: string;
@@ -499,6 +500,7 @@ export const SupabaseServerService = {
       description: `Pool Party 2026 - ${quantity}x ${category} Pass`,
       category,
       buyerName: buyerName.trim(),
+      isSandbox: params.isSandbox,
     });
 
     if (!relworxRes.success) {
