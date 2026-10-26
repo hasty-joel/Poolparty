@@ -8,7 +8,7 @@ export type OrderStatus = 'pending' | 'paid' | 'failed' | 'cancelled' | 'expired
 
 export interface OrderRecord {
   id: string;
-  order_ref: string; // Unique tx_ref sent to Flutterwave
+  order_ref: string; // Unique transaction reference
   category: TicketCategory;
   quantity: number;
   unit_price_ugx: number;
@@ -19,9 +19,11 @@ export interface OrderRecord {
   buyer_name: string;
   buyer_email: string;
   buyer_phone: string;
+  relworx_internal_ref?: string | null;
   flw_transaction_id?: string | null;
   flw_ref?: string | null;
   auth_url?: string | null;
+  gateway?: 'relworx' | 'flutterwave';
   reserved_until: string;
   created_at: string;
   paid_at?: string | null;
@@ -41,8 +43,10 @@ export interface InitiatePaymentResponse {
   orderRef?: string;
   message: string;
   authUrl?: string | null;
+  relworxInternalRef?: string | null;
   flwRef?: string | null;
   flwTransactionId?: string | number | null;
+  gateway?: 'relworx' | 'flutterwave';
   reservedUntil?: string;
   totalAmountUgx?: number;
   isSandboxTest?: boolean;

@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { FlutterwaveService } from './flutterwaveService';
+import { RelworxService } from './relworxService';
 import { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order';
 
 dotenv.config();
@@ -537,6 +538,243 @@ export const SupabaseServerService = {
   },
 
   /**
+   * Relworx Uganda Mobile Money Checkout Initiation (MTN MoMo & Airtel Money)
+   * 1. Validates inputs & calculates trusted server price (UGX 20,000 Ordinary, UGX 50,000 VIP)
+   * 2. Atomically reserves tickets with a 10-minute expiry
+   * 3. Triggers Relworx Mobile Money Request-Payment push to customer handset
+   */
+  async initiateRelworxPayment(params: {
+    category: 'VIP' | 'ORDINARY';
+    quantity: number;
+    buyerName: string;
+    buyerEmail: string;
+    buyerPhone: string;
+    network: PaymentNetwork;
+  }): Promise<{
+    success: boolean;
+    orderRef?: string;
+    message: string;
+    relworxInternalRef?: string | null;
+    reservedUntil?: string;
+    totalAmountUgx?: number;
+    gateway?: 'relworx';
+    isSandboxTest?: boolean;
+    requiresAction?: boolean;
+    error?: string;
+  }> {
+    const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = params;
+
+    // Validate quantities
+    if (quantity < 1 || quantity > 10) {
+      return { success: false, message: 'Invalid ticket quantity (minimum 1, maximum 10).' };
+    }
+
+    // Trusted prices enforced strictly on server
+    const unitPrice = category === 'VIP' ? 50000 : 20000;
+    const totalAmount = unitPrice * quantity;
+
+    // Release any stale expired reservations first
+    await this.releaseExpiredReservations();
+
+    // Generate unique order reference (must be 8-36 alphanumeric characters)
+    const timestamp = Date.now();
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const orderRef = `PP-RWX-${timestamp}-${randomSuffix}`;
+    const reservedUntil = new Date(timestamp + 10 * 60 * 1000).toISOString(); // 10 minutes
+
+    // Atomically claim tickets
+    let allocatedTicketIds: string[] = [];
+
+    if (supabaseAdmin) {
+      try {
+        const { data: available, error: fetchErr } = await supabaseAdmin
+          .from('tickets')
+          .select('id, ticket_number')
+          .eq('category', category)
+          .eq('status', 'available')
+          .order('ticket_number', { ascending: true })
+          .limit(quantity);
+
+        if (fetchErr || !available || available.length < quantity) {
+          const count = available?.length || 0;
+          return {
+            success: false,
+            message: `Insufficient inventory! Only ${count} ${category} ticket(s) currently available.`,
+          };
+        }
+
+        allocatedTicketIds = available.map((t) => t.id);
+
+        // Lock these tickets with 10-minute expiry
+        let updateRes = await supabaseAdmin
+          .from('tickets')
+          .update({
+            status: 'reserved',
+            payment_status: 'pending',
+            buyer_name: buyerName.trim(),
+            buyer_email: buyerEmail.trim(),
+            buyer_phone: buyerPhone.trim(),
+            order_ref: orderRef,
+            reserved_until: reservedUntil,
+          })
+          .in('id', allocatedTicketIds);
+
+        if (updateRes.error && updateRes.error.message?.includes('order_ref')) {
+          updateRes = await supabaseAdmin
+            .from('tickets')
+            .update({
+              status: 'reserved',
+              payment_status: 'pending',
+              buyer_name: buyerName.trim(),
+              buyer_email: buyerEmail.trim(),
+              buyer_phone: buyerPhone.trim(),
+            })
+            .in('id', allocatedTicketIds);
+        }
+
+        if (updateRes.error) {
+          throw updateRes.error;
+        }
+
+        // Always store order in memory tracking store
+        serverOrdersStore.unshift({
+          id: generateUuid(),
+          order_ref: orderRef,
+          category,
+          quantity,
+          unit_price_ugx: unitPrice,
+          total_amount_ugx: totalAmount,
+          status: 'pending',
+          payment_method: 'relworx_mobile_money',
+          network,
+          buyer_name: buyerName.trim(),
+          buyer_email: buyerEmail.trim(),
+          buyer_phone: buyerPhone.trim(),
+          gateway: 'relworx',
+          reserved_until: reservedUntil,
+          created_at: new Date().toISOString(),
+        });
+
+        // Also record order in public.orders table if table exists
+        try {
+          await supabaseAdmin.from('orders').insert({
+            order_ref: orderRef,
+            category,
+            quantity,
+            unit_price_ugx: unitPrice,
+            total_amount_ugx: totalAmount,
+            status: 'pending',
+            payment_method: 'relworx_mobile_money',
+            network,
+            buyer_name: buyerName.trim(),
+            buyer_email: buyerEmail.trim(),
+            buyer_phone: buyerPhone.trim(),
+            reserved_until: reservedUntil,
+          });
+        } catch {
+          // public.orders table optional
+        }
+      } catch (err: any) {
+        console.error('Database reservation error for Relworx:', err);
+        return {
+          success: false,
+          message: err?.message || 'Database error reserving tickets.',
+        };
+      }
+    } else {
+      // In-memory fallback
+      const available = serverMemoryStore.filter((t) => t.category === category && t.status === 'available');
+      if (available.length < quantity) {
+        return {
+          success: false,
+          message: `Insufficient inventory! Only ${available.length} ${category} ticket(s) currently available.`,
+        };
+      }
+
+      for (let i = 0; i < quantity; i++) {
+        const t = available[i];
+        t.status = 'reserved';
+        t.payment_status = 'pending';
+        t.buyer_name = buyerName.trim();
+        t.buyer_email = buyerEmail.trim();
+        t.buyer_phone = buyerPhone.trim();
+        t.order_ref = orderRef;
+        t.reserved_until = reservedUntil;
+        allocatedTicketIds.push(t.id);
+      }
+
+      serverOrdersStore.unshift({
+        id: generateUuid(),
+        order_ref: orderRef,
+        category,
+        quantity,
+        unit_price_ugx: unitPrice,
+        total_amount_ugx: totalAmount,
+        status: 'pending',
+        payment_method: 'relworx_mobile_money',
+        network,
+        buyer_name: buyerName.trim(),
+        buyer_email: buyerEmail.trim(),
+        buyer_phone: buyerPhone.trim(),
+        gateway: 'relworx',
+        reserved_until: reservedUntil,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    // Call Relworx Payments API
+    const relworxRes = await RelworxService.requestPayment({
+      reference: orderRef,
+      phone: buyerPhone.trim(),
+      amount: totalAmount,
+      description: `Pool Party 2026 - ${quantity}x ${category} Pass`,
+      category,
+      buyerName: buyerName.trim(),
+    });
+
+    if (!relworxRes.success) {
+      // Release reservation immediately if Relworx rejected
+      await this.releaseReservationByOrderRef(orderRef);
+      return {
+        success: false,
+        message: relworxRes.message || 'Relworx could not initiate payment on this phone number.',
+        error: relworxRes.error || 'RELWORX_REQUEST_FAILED',
+      };
+    }
+
+    const internalRef = relworxRes.internal_reference || null;
+    if (supabaseAdmin && internalRef) {
+      try {
+        await supabaseAdmin
+          .from('orders')
+          .update({
+            flw_ref: internalRef,
+          })
+          .eq('order_ref', orderRef);
+      } catch {
+        // optional
+      }
+    }
+
+    const ord = serverOrdersStore.find((o) => o.order_ref === orderRef);
+    if (ord) {
+      ord.relworx_internal_ref = internalRef;
+    }
+
+    return {
+      success: true,
+      orderRef,
+      message: relworxRes.message || 'Payment prompt initiated. Check your phone to enter PIN.',
+      relworxInternalRef: internalRef,
+      reservedUntil,
+      totalAmountUgx: totalAmount,
+      gateway: 'relworx',
+      isSandboxTest: !RelworxService.isConfigured(),
+      requiresAction: true,
+    };
+  },
+
+  /**
    * Release reservation when checkout is explicitly cancelled or declined
    */
   async releaseReservationByOrderRef(orderRef: string): Promise<boolean> {
@@ -687,8 +925,37 @@ export const SupabaseServerService = {
       };
     }
 
-    // If still pending, query Flutterwave verification API to see if user approved on their phone
-    if (order.status === 'pending' && FlutterwaveService.isConfigured()) {
+    // Check Relworx status if order was placed via Relworx or if Relworx is configured
+    if (
+      order.status === 'pending' &&
+      (order.gateway === 'relworx' || order.order_ref.startsWith('PP-RWX-') || RelworxService.isConfigured())
+    ) {
+      try {
+        const relCheck = await RelworxService.checkRequestStatus({
+          internalReference: order.relworx_internal_ref || undefined,
+          reference: orderRef,
+        });
+
+        if (relCheck.success && relCheck.status === 'success') {
+          // Confirmed payment on Relworx! Mark order as paid atomically
+          await this.markOrderAsPaid(orderRef, { relworx: relCheck, relworx_internal_ref: relCheck.internal_reference });
+          return await this.getOrderStatus(orderRef);
+        } else if (relCheck.status === 'failed') {
+          await this.releaseReservationByOrderRef(orderRef);
+          return {
+            success: false,
+            orderRef,
+            status: 'failed',
+            message: relCheck.message || 'Payment prompt was cancelled or declined on phone.',
+          };
+        }
+      } catch (err) {
+        console.warn('Error polling Relworx status:', err);
+      }
+    }
+
+    // If still pending, query Flutterwave verification API if applicable
+    if (order.status === 'pending' && FlutterwaveService.isConfigured() && !order.order_ref.startsWith('PP-RWX-')) {
       try {
         const flwVerify = await FlutterwaveService.verifyTransactionByRef(orderRef);
         if (
@@ -729,10 +996,10 @@ export const SupabaseServerService = {
   /**
    * Idempotently mark order and its reserved tickets as PAID and ISSUED
    */
-  async markOrderAsPaid(orderRef: string, flwData?: any): Promise<boolean> {
+  async markOrderAsPaid(orderRef: string, paymentData?: any): Promise<boolean> {
     const now = new Date().toISOString();
-    const flwTxId = flwData?.id ? String(flwData.id) : null;
-    const flwRef = flwData?.flw_ref || null;
+    const flwTxId = paymentData?.id ? String(paymentData.id) : null;
+    const flwRef = paymentData?.flw_ref || paymentData?.relworx_internal_ref || paymentData?.relworx?.internal_reference || null;
 
     if (supabaseAdmin) {
       try {
@@ -799,9 +1066,35 @@ export const SupabaseServerService = {
       ord.paid_at = now;
       ord.flw_transaction_id = flwTxId;
       ord.flw_ref = flwRef;
+      if (paymentData?.relworx_internal_ref) {
+        ord.relworx_internal_ref = paymentData.relworx_internal_ref;
+      }
     }
 
     return true;
+  },
+
+  /**
+   * Admin manual re-check of an order with Relworx
+   */
+  async verifyRelworxOrderDirectly(orderRef: string): Promise<{ success: boolean; message: string }> {
+    const ord = serverOrdersStore.find((o) => o.order_ref === orderRef);
+    const internalRef = ord?.relworx_internal_ref || undefined;
+
+    const check = await RelworxService.checkRequestStatus({
+      internalReference: internalRef,
+      reference: orderRef,
+    });
+
+    if (check.status === 'success') {
+      await this.markOrderAsPaid(orderRef, { relworx: check, relworx_internal_ref: check.internal_reference });
+      return { success: true, message: 'Relworx confirmed payment! Tickets successfully issued.' };
+    }
+
+    return {
+      success: false,
+      message: `Relworx status is currently "${check.status}". ${check.message || ''}`,
+    };
   },
 
   /**

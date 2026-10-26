@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { SupabaseServerService } from './src/server/supabaseServer';
 import { FlutterwaveService } from './src/server/flutterwaveService';
+import { RelworxService } from './src/server/relworxService';
 
 dotenv.config();
 
