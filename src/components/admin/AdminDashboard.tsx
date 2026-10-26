@@ -107,13 +107,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [isAuthenticated]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passcode === 'prince2026' || passcode === 'admin') {
-      setIsAuthenticated(true);
-      setAuthError('');
-    } else {
-      setAuthError('Invalid Admin Passcode. Default master passcode: prince2026');
+    const clean = passcode.trim();
+    if (!clean) {
+      setAuthError('Please enter the Admin passcode.');
+      return;
+    }
+    setLoading(true);
+    setAuthError('');
+    try {
+      const res = await TicketService.verifyAdminPasscode(clean);
+      if (res.success) {
+        TicketService.setAdminPasscode(clean);
+        setIsAuthenticated(true);
+      } else {
+        setAuthError(res.error || res.message || 'Invalid Admin passcode.');
+      }
+    } catch (err: any) {
+      setAuthError('Error verifying passcode: ' + (err?.message || 'Server error'));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -316,7 +330,7 @@ order by category;`;
                 type="password"
                 value={passcode}
                 onChange={(e) => setPasscode(e.target.value)}
-                placeholder="Enter passcode (default: prince2026)"
+                placeholder="Enter secret Admin passcode"
                 className="w-full px-4 py-3 bg-[#030712] border border-white/20 rounded-xl text-white text-sm focus:outline-none focus:border-amber-400 font-mono"
                 autoFocus
               />
@@ -324,14 +338,15 @@ order by category;`;
 
             <button
               type="submit"
-              className="w-full py-3.5 bg-gradient-to-r from-amber-400 to-cyan-400 hover:from-amber-300 hover:to-cyan-300 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg active:scale-98 transition-all cursor-pointer"
+              disabled={loading}
+              className="w-full py-3.5 bg-gradient-to-r from-amber-400 to-cyan-400 hover:from-amber-300 hover:to-cyan-300 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg active:scale-98 transition-all cursor-pointer"
             >
-              Sign In to Dashboard
+              {loading ? 'Verifying...' : 'Sign In to Dashboard'}
             </button>
           </form>
 
           <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs text-slate-400">
-            <span>Passcode: <strong className="text-amber-300 font-mono">prince2026</strong></span>
+            <span className="text-[11px] text-slate-400">Protected by <code className="text-amber-400">ADMIN_PASSCODE</code></span>
             <button
               onClick={onBack}
               className="text-cyan-400 hover:underline cursor-pointer"

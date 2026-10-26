@@ -48,9 +48,20 @@ export const RelworxService = {
     return process.env.RELWORX_WEBHOOK_SECRET;
   },
 
+  getWebhookUrl(): string {
+    const configured = process.env.RELWORX_WEBHOOK_URL;
+    if (configured) return configured;
+    const appUrl = process.env.APP_URL || process.env.VERCEL_URL;
+    if (appUrl) {
+      const origin = appUrl.startsWith('http') ? appUrl : `https://${appUrl}`;
+      return `${origin.replace(/\/$/, '')}/api/payments/relworx-webhook`;
+    }
+    return 'https://poolparty.ug/api/payments/relworx-webhook';
+  },
+
   isConfigured(): boolean {
     const key = this.getApiKey();
-    return Boolean(key && key.trim().length > 5);
+    return Boolean(key && key.trim().length > 5 && !key.includes('your_'));
   },
 
   /**
@@ -120,8 +131,16 @@ export const RelworxService = {
       description: params.description.substring(0, 100),
     };
 
-    if (!this.isConfigured()) {
-      console.warn('[Relworx] RELWORX_API_KEY is not configured in environment. Running in sandbox simulation mode.');
+    // In production, strictly reject initiation if gateway credentials are missing (never fake live payments)
+    if (process.env.NODE_ENV === 'production' && !this.isConfigured() && process.env.RELWORX_SIMULATE_TEST !== 'true') {
+      return {
+        success: false,
+        message: 'Relworx payment gateway is not configured for production. Please configure RELWORX_API_KEY and RELWORX_ACCOUNT_NO in Vercel environment variables.',
+        error: 'GATEWAY_NOT_CONFIGURED',
+      };
+    }
+
+    if (!this.isConfigured() || process.env.RELWORX_SIMULATE_TEST === 'true' || process.env.NODE_ENV === 'test') {
       return {
         success: true,
         message: `Relworx payment request simulated. Approve prompt on handset: ${msisdn} for UGX ${params.amount.toLocaleString()}. Set RELWORX_API_KEY in environment for live transactions.`,
@@ -150,11 +169,14 @@ export const RelworxService = {
 
       if (!response.ok) {
         console.error('[Relworx API Error]', response.status, data);
-        const errMsg = data.message || data.error || `Relworx API responded with HTTP ${response.status}`;
+        let errMsg = data.message || data.error || `Relworx API responded with HTTP ${response.status}`;
+        if (data.error_code === 'API_DISABLED' || errMsg.includes('API disabled')) {
+          errMsg = 'Relworx API is currently disabled for this business account. Please enable API access in your Relworx dashboard (https://payments.relworx.com/account/api).';
+        }
         return {
           success: false,
           message: errMsg,
-          error: errMsg,
+          error: data.error_code || errMsg,
         };
       }
 
@@ -248,7 +270,7 @@ export const RelworxService = {
         status: normalizedStatus,
         internal_reference: data.internal_reference || params.internalReference,
         reference: data.reference || params.reference,
-        amount: data.amount,
+        amount: data.amount ? Number(data.amount) : undefined,
         currency: data.currency,
         message: data.message,
         raw: data,
@@ -264,64 +286,137 @@ export const RelworxService = {
   },
 
   /**
-   * Verify HMAC-SHA256 signature from Relworx webhook
-   * Protects against replay attacks and verifies authenticity
+   * Verify official Relworx webhook signature according to documentation specifications:
+   * Header: "Relworx-Signature: t=1561370460,v=..."
+   *
+   * 1. Extract timestamp (t) and signature (v) from the header.
+   * 2. Prevent replay attacks (check timestamp age within 15 minutes).
+   * 3. Construct string-to-sign:
+   *    - exact registered webhook URL + timestamp t
+   *    - alphabetically sorted POST variables appended consecutively with no delimiter.
+   * 4. Compute HMAC-SHA256 with the secret key and compare securely.
    */
-  verifyWebhookSignature(signatureHeader: string | undefined, payloadBody: any): boolean {
+  verifyWebhookSignature(
+    signatureHeader: string | undefined,
+    payloadBody: Record<string, any>,
+    incomingUrl?: string
+  ): { valid: boolean; reason?: string } {
     const secret = this.getWebhookSecret();
-    if (!secret) {
-      // If secret not configured in dev, log warning but allow review in sandbox
-      console.warn('[Relworx Webhook] RELWORX_WEBHOOK_SECRET not set in environment.');
-      return true;
+    if (!secret || secret.trim().length === 0 || secret.includes('your_')) {
+      // In development / testing before credentials are input into Vercel
+      console.warn('[Relworx Webhook] RELWORX_WEBHOOK_SECRET not configured. Allowing test payload in sandbox.');
+      return { valid: true, reason: 'SANDBOX_NO_SECRET_CONFIGURED' };
     }
 
     if (!signatureHeader) {
-      return false;
+      return { valid: false, reason: 'MISSING_SIGNATURE_HEADER' };
     }
 
     try {
-      const bodyString = typeof payloadBody === 'string' ? payloadBody : JSON.stringify(payloadBody);
-
-      // Extract hash and timestamp if header is formatted as t=...,v1=... or v1=...
-      let signatureHash = signatureHeader.trim();
       let timestamp: number | null = null;
+      let signatureValue: string | null = null;
 
+      // Parse "t=...,v=..." or "t=...,v1=..."
       if (signatureHeader.includes('=')) {
         const parts = signatureHeader.split(',');
         for (const part of parts) {
           const [k, v] = part.split('=').map((s) => s.trim());
           if (k === 't' && v) {
             timestamp = parseInt(v, 10);
-          } else if ((k === 'v1' || k === 'signature') && v) {
-            signatureHash = v;
+          } else if ((k === 'v' || k === 'v1' || k === 'signature') && v) {
+            signatureValue = v;
+          }
+        }
+      } else {
+        // Direct raw signature fallback
+        signatureValue = signatureHeader.trim();
+      }
+
+      if (!signatureValue) {
+        return { valid: false, reason: 'EMPTY_SIGNATURE_VALUE' };
+      }
+
+      // Replay attack prevention: validate timestamp age if present (within 15 minutes)
+      if (timestamp && !isNaN(timestamp)) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const ageSec = Math.abs(nowSec - timestamp);
+        if (ageSec > 900) {
+          return { valid: false, reason: `EXPIRED_TIMESTAMP_${ageSec}s_OLD` };
+        }
+      }
+
+      // Construct canonical string-to-sign per Relworx docs:
+      // URL + timestamp + sorted payload keys & values (no delimiter)
+      const targetUrl = incomingUrl || this.getWebhookUrl();
+      let stringToSign = targetUrl;
+      if (timestamp) {
+        stringToSign += String(timestamp);
+      }
+
+      if (payloadBody && typeof payloadBody === 'object') {
+        const sortedKeys = Object.keys(payloadBody).sort();
+        for (const k of sortedKeys) {
+          const val = payloadBody[k];
+          if (val !== undefined && val !== null) {
+            stringToSign += `${k}${typeof val === 'object' ? JSON.stringify(val) : String(val)}`;
           }
         }
       }
 
-      // Prevent replay attacks if timestamp is present (> 15 minutes old)
-      if (timestamp && !isNaN(timestamp)) {
-        const ageSec = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
-        if (ageSec > 900) {
-          console.warn(`[Relworx Webhook] Expired timestamp signature (${ageSec}s old).`);
-          return false;
-        }
-      }
-
       // Compute HMAC-SHA256
-      const computedHash = crypto.createHmac('sha256', secret).update(bodyString).digest('hex');
+      const hmac = crypto.createHmac('sha256', secret).update(stringToSign);
+      const computedHex = hmac.digest('hex');
+      const computedBase64 = crypto.createHmac('sha256', secret).update(stringToSign).digest('base64');
 
-      // Compare using timing-safe comparison
-      const sigBuf = Buffer.from(signatureHash.toLowerCase(), 'utf-8');
-      const compBuf = Buffer.from(computedHash.toLowerCase(), 'utf-8');
+      // Also compute fallback raw body HMAC for broad compatibility
+      const rawBodyHmacHex = crypto
+        .createHmac('sha256', secret)
+        .update(JSON.stringify(payloadBody))
+        .digest('hex');
 
-      if (sigBuf.length !== compBuf.length) {
-        return false;
+      const cleanSig = signatureValue.trim();
+
+      // Constant-time comparison helper
+      const matches = (a: string, b: string) => {
+        const bufA = Buffer.from(a.toLowerCase());
+        const bufB = Buffer.from(b.toLowerCase());
+        return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+      };
+
+      if (
+        matches(cleanSig, computedHex) ||
+        cleanSig === computedBase64 ||
+        matches(cleanSig, rawBodyHmacHex)
+      ) {
+        return { valid: true };
       }
 
-      return crypto.timingSafeEqual(sigBuf, compBuf);
-    } catch (err) {
-      console.error('[Relworx Signature Verification Error]', err);
-      return false;
+      return { valid: false, reason: 'SIGNATURE_MISMATCH' };
+    } catch (err: any) {
+      console.error('[Relworx Signature Verification Exception]', err);
+      return { valid: false, reason: err?.message || 'VERIFICATION_ERROR' };
     }
+  },
+
+  /**
+   * Helper to construct canonical Relworx-Signature header for testing or provider simulation
+   */
+  computeWebhookSignature(
+    secret: string,
+    payloadBody: Record<string, any>,
+    timestamp: number,
+    targetUrl?: string
+  ): string {
+    const url = targetUrl || this.getWebhookUrl();
+    let stringToSign = `${url}${timestamp}`;
+    const sortedKeys = Object.keys(payloadBody).sort();
+    for (const k of sortedKeys) {
+      const val = payloadBody[k];
+      if (val !== undefined && val !== null) {
+        stringToSign += `${k}${typeof val === 'object' ? JSON.stringify(val) : String(val)}`;
+      }
+    }
+    const hex = crypto.createHmac('sha256', secret).update(stringToSign).digest('hex');
+    return `t=${timestamp},v=${hex}`;
   },
 };

@@ -26,15 +26,48 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
   const [result, setResult] = useState<CheckInResult | null>(null);
   const [recentScans, setRecentScans] = useState<TicketRecord[]>([]);
 
+  // Gate Staff Authorization State
+  const [gatePasscode, setGatePasscode] = useState('');
+  const [isUnlocked, setIsUnlocked] = useState(Boolean(TicketService.getAdminPasscode()));
+  const [passcodeError, setPasscodeError] = useState('');
+  const [isCheckingPasscode, setIsCheckingPasscode] = useState(false);
+
   const loadRecent = async () => {
+    if (!TicketService.getAdminPasscode()) return;
     const all = await TicketService.getAllTickets();
     const used = all.filter((t) => t.checked_in_at).slice(0, 6);
     setRecentScans(used);
   };
 
   useEffect(() => {
-    loadRecent();
-  }, [result]);
+    if (isUnlocked) {
+      loadRecent();
+    }
+  }, [result, isUnlocked]);
+
+  const handleUnlockGate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = gatePasscode.trim();
+    if (!clean) {
+      setPasscodeError('Please enter the Admin / Gate Passcode.');
+      return;
+    }
+    setIsCheckingPasscode(true);
+    setPasscodeError('');
+    try {
+      const res = await TicketService.verifyAdminPasscode(clean);
+      if (res.success) {
+        TicketService.setAdminPasscode(clean);
+        setIsUnlocked(true);
+      } else {
+        setPasscodeError(res.error || res.message || 'Invalid passcode.');
+      }
+    } catch (err: any) {
+      setPasscodeError('Error verifying passcode: ' + (err?.message || 'Server error'));
+    } finally {
+      setIsCheckingPasscode(false);
+    }
+  };
 
   const handleVerify = async (codeToVerify?: string) => {
     const target = (codeToVerify || inputCode).trim();
@@ -56,7 +89,7 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
       if (res.status === 'ADMITTED') {
         setInputCode('');
       }
-    } catch (err) {
+    } catch {
       setResult({
         status: 'INVALID',
         message: 'System error during verification. Check database connection.',
@@ -65,6 +98,66 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
       setIsVerifying(false);
     }
   };
+
+  if (!isUnlocked) {
+    return (
+      <div className="min-h-screen bg-[#030712] flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-[#070e1b] border-2 border-cyan-400/40 rounded-3xl p-8 shadow-2xl text-center space-y-6">
+          <div className="w-16 h-16 rounded-2xl bg-cyan-400/10 border border-cyan-400/30 text-cyan-400 flex items-center justify-center mx-auto">
+            <ShieldCheck className="w-8 h-8" />
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-black text-white font-display">
+              Gate Staff Verifier
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Authorized entrance scanner · Prince Resort Bunamwaya Pool Party 2026
+            </p>
+          </div>
+
+          {passcodeError && (
+            <div className="p-3 bg-rose-950/50 border border-rose-500/50 rounded-xl text-xs text-rose-300">
+              {passcodeError}
+            </div>
+          )}
+
+          <form onSubmit={handleUnlockGate} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 text-left">
+                Gate Staff / Admin Passcode
+              </label>
+              <input
+                type="password"
+                value={gatePasscode}
+                onChange={(e) => setGatePasscode(e.target.value)}
+                placeholder="Enter passcode to unlock scanner"
+                className="w-full px-4 py-3 bg-[#030712] border border-white/20 rounded-xl text-white text-sm focus:outline-none focus:border-cyan-400 font-mono"
+                autoFocus
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isCheckingPasscode}
+              className="w-full py-3.5 bg-gradient-to-r from-cyan-400 to-amber-400 hover:from-cyan-300 hover:to-amber-300 disabled:opacity-50 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg active:scale-98 transition-all cursor-pointer"
+            >
+              {isCheckingPasscode ? 'Verifying...' : 'Unlock Gate Scanner'}
+            </button>
+          </form>
+
+          <div className="pt-2 border-t border-white/10 flex items-center justify-center text-xs text-slate-400">
+            <button
+              onClick={onBack}
+              className="text-amber-400 hover:underline cursor-pointer"
+            >
+              Back to Public Website
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#030712] text-slate-100 p-4 sm:p-6 lg:p-8">
