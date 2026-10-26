@@ -1,0 +1,60 @@
+import React from 'react';
+import { Crown, Phone, MapPin, Calendar, ArrowUp } from 'lucide-react';
+import { EVENT_DATA } from '../types/event';
+
+export const Footer: React.FC = () => {
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  return (
+    <footer className="bg-[#02050b] border-t border-amber-500/20 text-slate-400 text-xs py-10">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-6 pb-8 border-b border-white/10 text-center md:text-left">
+          
+          {/* Brand */}
+          <div>
+            <div className="flex items-center justify-center md:justify-start gap-2 mb-1">
+              <Crown className="w-4 h-4 text-amber-400" />
+              <span className="text-sm font-black text-white tracking-wide font-display">
+                Prince Resort Bunamwaya Bella
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              POOL PARTY · Friday, December 11th 2026 · 12 PM till late
+            </p>
+          </div>
+
+          {/* Quick Details */}
+          <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-slate-300">
+            <span className="text-amber-400 font-bold">Ordinary: 20K</span>
+            <span aria-hidden="true" className="text-slate-600">·</span>
+            <span className="text-cyan-400 font-bold">VIP: 50K</span>
+            <span aria-hidden="true" className="text-slate-600">·</span>
+            <a
+              href={`tel:${EVENT_DATA.rsvpTel}`}
+              className="text-white hover:text-amber-300 font-bold flex items-center gap-1.5"
+            >
+              <Phone className="w-3.5 h-3.5 text-amber-400" />
+              <span>RSVP {EVENT_DATA.rsvpPhone}</span>
+            </a>
+          </div>
+
+          {/* Back to top */}
+          <button
+            onClick={scrollToTop}
+            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
+          >
+            <span>Back to Top</span>
+            <ArrowUp className="w-3.5 h-3.5 text-amber-400" />
+          </button>
+        </div>
+
+        <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-500 text-center sm:text-left">
+          <p>© 2026 POOL PARTY · Prince Resort, Bunamwaya (Bella), Uganda.</p>
+          <p>Hosted by Trevor DJ · Strictly 18+ · Secure On-site Parking</p>
+        </div>
+      </div>
+    </footer>
+  );
+};

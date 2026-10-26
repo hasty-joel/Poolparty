@@ -1,0 +1,6 @@
+{
+  "name": "Pool Party - Prince Resort Bunamwaya",
+  "description": "Official ticketing and event experience for Pool Party on Friday, 11 December 2026 at Prince Resort, Bunamwaya (Bella), Uganda.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

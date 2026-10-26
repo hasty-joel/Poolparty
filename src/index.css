@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-midnight: #030712;
+    --color-deep-navy: #070e1b;
+    --color-navy-surface: #0a1526;
+    --color-navy-card: #0f1e36;
+    --color-electric-cyan: #00f0ff;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: #030712;
+    color: #f1f5f9;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+}
+
+/* Subtle water caustic ambient overlay */
+.water-reflection-grid {
+  background-image: 
+    radial-gradient(circle at 50% 20%, rgba(6, 182, 212, 0.08) 0%, transparent 60%),
+    radial-gradient(circle at 80% 80%, rgba(14, 165, 233, 0.06) 0%, transparent 50%),
+    radial-gradient(circle at 20% 70%, rgba(2, 132, 199, 0.05) 0%, transparent 50%);
+}
+
+/* Glass card subtle texture */
+.glass-panel {
+  background: rgba(15, 30, 54, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(56, 189, 248, 0.14);
+}
+
+.glass-panel-subtle {
+  background: rgba(10, 21, 38, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #030712;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
