@@ -1,26 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Ticket, 
   Minus, 
   Plus, 
-  CreditCard, 
-  Smartphone, 
   CheckCircle2, 
   AlertCircle, 
   Crown,
   Sparkles,
   ArrowRight,
-  Phone
+  Smartphone,
+  Search,
+  RefreshCw,
+  Clock
 } from 'lucide-react';
-import { EVENT_DATA, TICKET_TIERS, TicketTier, PaymentMethod, BuyerForm, ReservationOrder } from '../types/event';
+import { EVENT_DATA, TICKET_TIERS, TicketTier, PaymentMethod, BuyerForm } from '../types/event';
+import { TicketService } from '../lib/ticketService';
+import { TicketRecord, PublicInventoryCounts } from '../types/inventory';
+import { FlutterwavePaymentModal } from './payment/FlutterwavePaymentModal';
+import { TicketLookupModal } from './ticket/TicketLookupModal';
 
 interface TicketPurchaseProps {
-  onContinueToPayment: (order: ReservationOrder) => void;
+  onContinueToPayment: (ticket: TicketRecord) => void;
 }
 
 export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPayment }) => {
   const [selectedTier, setSelectedTier] = useState<TicketTier>('ordinary');
   const [quantity, setQuantity] = useState<number>(1);
+  const [network, setNetwork] = useState<'MTN' | 'AIRTEL'>('MTN');
   const [form, setForm] = useState<BuyerForm>({
     fullName: '',
     email: '',
@@ -31,10 +37,41 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   });
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [publicCounts, setPublicCounts] = useState<PublicInventoryCounts | null>(null);
+
+  // Flutterwave Checkout Modal State
+  const [checkoutModal, setCheckoutModal] = useState<{
+    orderRef: string;
+    message: string;
+    authUrl?: string | null;
+    reservedUntil?: string | null;
+    totalAmountUgx?: number;
+    buyerName?: string;
+    buyerPhone?: string;
+    network?: 'MTN' | 'AIRTEL';
+  } | null>(null);
+
+  // Ticket Lookup Modal State
+  const [lookupOpen, setLookupOpen] = useState(false);
+
+  const refreshCounts = () => {
+    TicketService.getPublicCounts().then(setPublicCounts);
+  };
+
+  useEffect(() => {
+    refreshCounts();
+  }, []);
 
   const tierInfo = TICKET_TIERS[selectedTier];
   const unitPrice = tierInfo.priceUgx;
   const totalPrice = unitPrice * quantity;
+
+  // Remaining inventory calculation from public counts endpoint (RLS & privacy preserved)
+  const remainingInventory = publicCounts
+    ? selectedTier === 'vip'
+      ? publicCounts.VIP.available
+      : publicCounts.ORDINARY.available
+    : selectedTier === 'vip' ? 20 : 50;
 
   const handleTierChange = (tier: TicketTier) => {
     setSelectedTier(tier);
@@ -42,7 +79,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
   const handleQuantityChange = (delta: number) => {
     const next = quantity + delta;
-    if (next >= 1 && next <= 10) {
+    if (next >= 1 && next <= Math.min(10, remainingInventory)) {
       setQuantity(next);
     }
   };
@@ -51,47 +88,69 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     const errs: { [key: string]: string } = {};
 
     if (!form.fullName.trim() || form.fullName.trim().length < 3) {
-      errs.fullName = 'Please enter your full name.';
+      errs.fullName = 'Please enter your full legal name.';
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!form.email.trim() || !emailRegex.test(form.email)) {
-      errs.email = 'Please provide a valid email address.';
+      errs.email = 'Please provide a valid email address for your ticket confirmation.';
     }
 
     const cleanedPhone = form.phone.replace(/[\s-]/g, '');
     if (!cleanedPhone || cleanedPhone.length < 9) {
-      errs.phone = 'Please provide a valid phone number (e.g. 0775 198 484).';
+      errs.phone = 'Please provide a valid Uganda phone number (e.g. 0775 198 484).';
+    }
+
+    if (remainingInventory < quantity) {
+      errs.inventory = `Sorry, only ${remainingInventory} ${selectedTier.toUpperCase()} tickets left in stock!`;
     }
 
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
-      const randomRef = Math.floor(10000 + Math.random() * 90000);
-      const order: ReservationOrder = {
-        orderId: `PP26-UG-${randomRef}`,
-        timestamp: new Date().toISOString(),
+    setErrors({});
+
+    try {
+      const res = await TicketService.initiateFlutterwavePayment({
+        category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
+        quantity,
         buyerName: form.fullName.trim(),
         buyerEmail: form.email.trim(),
         buyerPhone: form.phone.trim(),
-        tier: selectedTier,
-        tierName: tierInfo.name,
-        quantity,
-        unitPrice,
-        totalPrice,
-        paymentMethod: form.paymentMethod,
-        status: 'integration_sandbox',
-      };
-      onContinueToPayment(order);
-    }, 350);
+        network,
+      });
+
+      if (!res.success || !res.orderRef) {
+        setErrors({ inventory: res.message || 'Payment initiation failed. Please try again.' });
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Refresh stock counts
+      refreshCounts();
+
+      // Open Flutterwave prompt modal
+      setCheckoutModal({
+        orderRef: res.orderRef,
+        message: res.message,
+        authUrl: res.authUrl,
+        reservedUntil: res.reservedUntil,
+        totalAmountUgx: res.totalAmountUgx || totalPrice,
+        buyerName: form.fullName.trim(),
+        buyerPhone: form.phone.trim(),
+        network,
+      });
+    } catch (err: any) {
+      setErrors({ inventory: err?.message || 'Error processing reservation' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -99,19 +158,30 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Section Header */}
-        <div className="text-center max-w-xl mx-auto mb-12">
-          <div className="text-xs font-bold tracking-widest text-amber-400 uppercase mb-1">
-            Official Ticket Booking
+        <div className="text-center max-w-xl mx-auto mb-10">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/20 text-xs font-bold tracking-widest text-amber-400 uppercase mb-3">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            {publicCounts?.isLiveSupabase ? 'Supabase Inventory & Flutterwave Active' : 'Pre-Allocated Stock Active (70 Tickets)'}
           </div>
           <h2 className="text-3xl sm:text-5xl font-black text-white font-display">
             Select Your Pass
           </h2>
           <p className="text-slate-400 text-sm mt-2">
-            Ordinary (UGX 20,000) or VIP (UGX 50,000). Instant digital ticket delivery.
+            Limited capacity (70 tickets total): 20 VIP @ UGX 50,000 · 50 Ordinary @ UGX 20,000.
           </p>
+
+          <div className="mt-3">
+            <button
+              onClick={() => setLookupOpen(true)}
+              className="text-xs text-cyan-400 hover:text-cyan-300 underline font-semibold inline-flex items-center gap-1 cursor-pointer"
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span>Already paid? Retrieve & download your tickets here</span>
+            </button>
+          </div>
         </div>
 
-        {/* Tier Selector Tabs */}
+        {/* Tier Selector Tabs with Live Stock Remaining */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto mb-10">
           
           {/* Ordinary Tier Button */}
@@ -138,9 +208,14 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             <div className="text-xl font-bold text-amber-400 font-mono mt-1">
               UGX 20,000
             </div>
-            <p className="text-xs text-slate-400 mt-2">
-              Full pool access, Live DJ sets, Swimwear contest & party games.
-            </p>
+            
+            {/* Live Remaining Badge */}
+            <div className="mt-3 flex items-center justify-between text-xs pt-2 border-t border-white/10">
+              <span className="text-slate-400">Available Stock:</span>
+              <span className="font-bold font-mono text-amber-300">
+                {publicCounts ? publicCounts.ORDINARY.available : 50} / 50 Remaining
+              </span>
+            </div>
           </button>
 
           {/* VIP Tier Button */}
@@ -168,12 +243,25 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             <div className="text-xl font-bold text-cyan-300 font-mono mt-1">
               UGX 50,000
             </div>
-            <p className="text-xs text-slate-400 mt-2">
-              Fast-track gate, reserved poolside cabana zone & welcome skewer/drink.
-            </p>
+
+            {/* Live Remaining Badge */}
+            <div className="mt-3 flex items-center justify-between text-xs pt-2 border-t border-white/10">
+              <span className="text-slate-400">Available Stock:</span>
+              <span className="font-bold font-mono text-cyan-300">
+                {publicCounts ? publicCounts.VIP.available : 20} / 20 Remaining
+              </span>
+            </div>
           </button>
 
         </div>
+
+        {/* Global Inventory Alert if low */}
+        {errors.inventory && (
+          <div className="max-w-2xl mx-auto mb-6 p-4 rounded-xl bg-rose-950/60 border border-rose-500 text-rose-200 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{errors.inventory}</span>
+          </div>
+        )}
 
         {/* The Checkout Card */}
         <div className="bg-[#070e1b] border border-amber-400/30 rounded-3xl p-6 sm:p-10 shadow-2xl grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -226,7 +314,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   <button
                     type="button"
                     onClick={() => handleQuantityChange(1)}
-                    disabled={quantity >= 10}
+                    disabled={quantity >= Math.min(10, remainingInventory)}
                     className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
@@ -256,12 +344,12 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             </div>
           </div>
 
-          {/* Attendee Form & Payment Method (7 cols) */}
+          {/* Attendee Form & Mobile Money Provider (7 cols) */}
           <div className="lg:col-span-7 flex flex-col justify-between">
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <h4 className="text-lg font-bold text-white">
-                  Attendee Details
+                  Attendee & Mobile Money Details
                 </h4>
                 <p className="text-xs text-slate-400">
                   Where should we send your official entry QR ticket?
@@ -271,7 +359,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               {/* Full Name */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Full Name
+                  Full Name <span className="text-amber-400">*</span>
                 </label>
                 <input
                   type="text"
@@ -288,13 +376,13 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               {/* Email Address */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Email Address
+                  Email Address <span className="text-amber-400">*</span>
                 </label>
                 <input
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  placeholder="joel@example.com"
+                  placeholder="joel@example.ug"
                   className={`w-full px-4 py-2.5 rounded-xl bg-[#030712] border text-white text-sm focus:outline-none focus:ring-1 ${
                     errors.email ? 'border-rose-500 focus:ring-rose-500' : 'border-white/15 focus:border-amber-400 focus:ring-amber-400'
                   }`}
@@ -305,63 +393,63 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               {/* Phone Number */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Phone Number (for SMS ticket & Mobile Money)
+                  Uganda Mobile Money Phone Number <span className="text-amber-400">*</span>
                 </label>
                 <input
                   type="tel"
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                  placeholder="0775 000 000 or +256 700 000 000"
+                  placeholder="0775 198 484 or 256700000000"
                   className={`w-full px-4 py-2.5 rounded-xl bg-[#030712] border text-white text-sm focus:outline-none focus:ring-1 ${
                     errors.phone ? 'border-rose-500 focus:ring-rose-500' : 'border-white/15 focus:border-amber-400 focus:ring-amber-400'
                   }`}
                 />
                 {errors.phone && <p className="text-xs text-rose-400 mt-1">{errors.phone}</p>}
+                <p className="text-[11px] text-slate-400 mt-1">
+                  A Mobile Money push prompt will be sent to this number.
+                </p>
               </div>
 
-              {/* Payment Provider Selection */}
+              {/* Mobile Money Operator Selection */}
               <div className="pt-2">
                 <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Payment Method
+                  Select Mobile Money Operator
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
-                    onClick={() => setForm({ ...form, paymentMethod: 'mtn_momo' })}
-                    className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
-                      form.paymentMethod === 'mtn_momo'
-                        ? 'bg-amber-950/40 border-amber-400 text-white font-bold'
-                        : 'bg-[#030712] border-white/10 text-slate-400'
+                    onClick={() => setNetwork('MTN')}
+                    className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                      network === 'MTN'
+                        ? 'bg-amber-950/50 border-amber-400 text-white shadow-md'
+                        : 'bg-[#030712] border-white/10 text-slate-400 hover:border-white/20'
                     }`}
                   >
-                    <Smartphone className="w-4 h-4 text-amber-400 mb-1" />
-                    <span className="block text-xs">MTN MoMo</span>
+                    <div className="w-8 h-8 rounded-lg bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs shrink-0">
+                      MTN
+                    </div>
+                    <div>
+                      <span className="block text-xs font-bold text-white">MTN MoMo</span>
+                      <span className="text-[10px] text-amber-300">Dial *165# PIN Prompt</span>
+                    </div>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setForm({ ...form, paymentMethod: 'airtel_money' })}
-                    className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
-                      form.paymentMethod === 'airtel_money'
-                        ? 'bg-red-950/40 border-red-400 text-white font-bold'
-                        : 'bg-[#030712] border-white/10 text-slate-400'
+                    onClick={() => setNetwork('AIRTEL')}
+                    className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex items-center gap-3 ${
+                      network === 'AIRTEL'
+                        ? 'bg-red-950/50 border-red-400 text-white shadow-md'
+                        : 'bg-[#030712] border-white/10 text-slate-400 hover:border-white/20'
                     }`}
                   >
-                    <Smartphone className="w-4 h-4 text-red-400 mb-1" />
-                    <span className="block text-xs">Airtel Money</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setForm({ ...form, paymentMethod: 'card' })}
-                    className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
-                      form.paymentMethod === 'card'
-                        ? 'bg-cyan-950/40 border-cyan-400 text-white font-bold'
-                        : 'bg-[#030712] border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <CreditCard className="w-4 h-4 text-cyan-400 mb-1" />
-                    <span className="block text-xs">Card / Visa</span>
+                    <div className="w-8 h-8 rounded-lg bg-red-600 text-white font-black flex items-center justify-center text-xs shrink-0">
+                      AIR
+                    </div>
+                    <div>
+                      <span className="block text-xs font-bold text-white">Airtel Money</span>
+                      <span className="text-[10px] text-red-300">Dial *185# PIN Prompt</span>
+                    </div>
                   </button>
                 </div>
               </div>
@@ -370,22 +458,26 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               <div className="pt-4">
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || remainingInventory < quantity}
                   className="w-full py-4 text-sm font-black tracking-wider text-slate-950 bg-gradient-to-r from-amber-400 via-amber-300 to-cyan-400 hover:from-amber-300 hover:to-cyan-300 disabled:opacity-50 transition-all rounded-xl shadow-lg shadow-amber-500/20 active:scale-98 whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2"
                 >
                   {isSubmitting ? (
-                    <span>PREPARING...</span>
+                    <div className="flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>LOCKING INVENTORY & CALLING FLUTTERWAVE...</span>
+                    </div>
                   ) : (
                     <>
-                      <span>CONTINUE TO PAYMENT · UGX {totalPrice.toLocaleString()}</span>
+                      <span>PAY VIA {network} MOBILE MONEY · UGX {totalPrice.toLocaleString()}</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
                 </button>
 
-                <p className="text-[11px] text-center text-slate-400 mt-2">
-                  Sandbox demo mode · No live money debited · RSVP Inquiries: {EVENT_DATA.rsvpPhone}
-                </p>
+                <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 mt-3">
+                  <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>10-Minute Lock · Official Flutterwave Uganda Integration · RSVP: {EVENT_DATA.rsvpPhone}</span>
+                </div>
               </div>
             </form>
           </div>
@@ -393,6 +485,34 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         </div>
 
       </div>
+
+      {/* Flutterwave Checkout Modal */}
+      {checkoutModal && (
+        <FlutterwavePaymentModal
+          orderRef={checkoutModal.orderRef}
+          initialMessage={checkoutModal.message}
+          authUrl={checkoutModal.authUrl}
+          reservedUntil={checkoutModal.reservedUntil}
+          totalAmountUgx={checkoutModal.totalAmountUgx}
+          buyerName={checkoutModal.buyerName}
+          buyerPhone={checkoutModal.buyerPhone}
+          network={checkoutModal.network}
+          onClose={() => {
+            setCheckoutModal(null);
+            refreshCounts();
+          }}
+          onPaymentSuccess={() => {
+            refreshCounts();
+          }}
+        />
+      )}
+
+      {/* Attendee Ticket Self-Service Retrieval Modal */}
+      <TicketLookupModal
+        isOpen={lookupOpen}
+        onClose={() => setLookupOpen(false)}
+        onSelectTicket={(ticket) => onContinueToPayment(ticket)}
+      />
     </section>
   );
 };

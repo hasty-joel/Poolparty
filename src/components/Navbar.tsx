@@ -1,14 +1,20 @@
 import React from 'react';
-import { Ticket, Phone, Crown } from 'lucide-react';
+import { Ticket, Phone, Crown, Lock, QrCode } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
 
 interface NavbarProps {
   onTicketClick: () => void;
+  onOpenAdmin: () => void;
+  onOpenScanner: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ onTicketClick }) => {
+export const Navbar: React.FC<NavbarProps> = ({ 
+  onTicketClick, 
+  onOpenAdmin, 
+  onOpenScanner 
+}) => {
   return (
-    <header className="fixed top-0 left-0 right-0 z-40 bg-[#030712]/90 backdrop-blur-md border-b border-amber-500/20">
+    <header className="fixed top-0 left-0 right-0 z-40 bg-[#030712]/95 backdrop-blur-md border-b border-amber-500/20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between gap-4">
         {/* Zone 1: Brand wordmark & Prince Resort badge */}
         <a
@@ -21,7 +27,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onTicketClick }) => {
         >
           <Crown className="w-5 h-5 text-amber-400 group-hover:rotate-6 transition-transform" />
           <div className="flex flex-col">
-            <span className="text-xs uppercase tracking-widest text-amber-300 font-bold leading-none">
+            <span className="text-[10px] sm:text-xs uppercase tracking-widest text-amber-300 font-bold leading-none">
               Prince Resort
             </span>
             <span className="text-lg sm:text-xl font-black tracking-tight text-white font-display group-hover:text-cyan-300 transition-colors leading-tight">
@@ -30,7 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onTicketClick }) => {
           </div>
         </a>
 
-        {/* Zone 2: Navigation / Key Quick Info */}
+        {/* Zone 2: Navigation Links */}
         <nav className="hidden md:flex items-center gap-6 text-xs font-semibold text-slate-300 tracking-wide uppercase">
           <a
             href="#lineup"
@@ -50,6 +56,20 @@ export const Navbar: React.FC<NavbarProps> = ({ onTicketClick }) => {
           >
             Prince Resort
           </a>
+          <button
+            onClick={onOpenScanner}
+            className="hover:text-cyan-300 transition-colors whitespace-nowrap flex items-center gap-1 text-slate-300 cursor-pointer"
+          >
+            <QrCode className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Gate Scanner</span>
+          </button>
+          <button
+            onClick={onOpenAdmin}
+            className="hover:text-amber-300 transition-colors whitespace-nowrap flex items-center gap-1 text-slate-300 cursor-pointer"
+          >
+            <Lock className="w-3.5 h-3.5 text-amber-400" />
+            <span>Admin</span>
+          </button>
         </nav>
 
         {/* Zone 3: RSVP phone and Tickets CTA */}
@@ -59,8 +79,16 @@ export const Navbar: React.FC<NavbarProps> = ({ onTicketClick }) => {
             className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-300 hover:text-white bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/30 rounded-lg transition-colors whitespace-nowrap"
           >
             <Phone className="w-3.5 h-3.5 text-amber-400" />
-            <span>RSVP {EVENT_DATA.rsvpPhone}</span>
+            <span>RSVP</span>
           </a>
+
+          <button
+            onClick={onOpenAdmin}
+            className="md:hidden p-2 text-amber-400 hover:text-white bg-white/5 rounded-lg border border-white/10"
+            title="Admin Dashboard"
+          >
+            <Lock className="w-4 h-4" />
+          </button>
 
           <button
             onClick={onTicketClick}
