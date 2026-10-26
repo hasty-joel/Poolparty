@@ -36,6 +36,8 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [publicCounts, setPublicCounts] = useState<PublicInventoryCounts | null>(null);
+  const [loadingCounts, setLoadingCounts] = useState(true);
+  const [countsError, setCountsError] = useState<string | null>(null);
 
   // Relworx Checkout Modal State
   const [checkoutModal, setCheckoutModal] = useState<{
@@ -51,8 +53,18 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   // Ticket Lookup Modal State
   const [lookupOpen, setLookupOpen] = useState(false);
 
-  const refreshCounts = () => {
-    TicketService.getPublicCounts().then(setPublicCounts);
+  const refreshCounts = async () => {
+    setLoadingCounts(true);
+    setCountsError(null);
+    const res = await TicketService.getPublicCounts();
+    if (res.success && res.counts) {
+      setPublicCounts(res.counts);
+      setCountsError(null);
+    } else {
+      setCountsError(res.error || 'Unable to connect to live database.');
+      setPublicCounts(null);
+    }
+    setLoadingCounts(false);
   };
 
   useEffect(() => {
@@ -63,12 +75,12 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   const unitPrice = tierInfo.priceUgx;
   const totalPrice = unitPrice * quantity;
 
-  // Remaining inventory calculation from public counts endpoint (RLS & privacy preserved)
+  // Remaining inventory strictly from Supabase records
   const remainingInventory = publicCounts
     ? selectedTier === 'vip'
       ? publicCounts.VIP.available
       : publicCounts.ORDINARY.available
-    : selectedTier === 'vip' ? 20 : 50;
+    : 0;
 
   const handleTierChange = (tier: TicketTier) => {
     setSelectedTier(tier);
@@ -76,7 +88,8 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
   const handleQuantityChange = (delta: number) => {
     const next = quantity + delta;
-    if (next >= 1 && next <= Math.min(10, remainingInventory)) {
+    const maxAllowed = remainingInventory > 0 ? Math.min(10, remainingInventory) : 1;
+    if (next >= 1 && next <= maxAllowed) {
       setQuantity(next);
     }
   };
@@ -98,7 +111,9 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
       errs.phone = 'Please provide a valid Uganda phone number (e.g. 0775 198 484).';
     }
 
-    if (remainingInventory < quantity) {
+    if (!publicCounts) {
+      errs.inventory = 'Cannot complete reservation: Live database is currently offline or unreachable.';
+    } else if (remainingInventory < quantity) {
       errs.inventory = `Only ${remainingInventory} ${selectedTier.toUpperCase()} pass(es) remaining in stock.`;
     }
 
@@ -114,7 +129,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     setErrors({});
 
     try {
-      let res = await TicketService.initiateRelworxPayment({
+      const res = await TicketService.initiateRelworxPayment({
         category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
         quantity,
         buyerName: form.fullName.trim(),
@@ -123,27 +138,17 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         network,
       });
 
-      // If live Relworx account has API access disabled, fall back to sandbox testing simulation mode
-      if (!res.success && res.message?.includes('API disabled')) {
-        console.warn('[Relworx] Live API reports disabled account, initiating in sandbox testing simulation mode.');
-        res = await TicketService.initiateRelworxPayment({
-          category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
-          quantity,
-          buyerName: form.fullName.trim(),
-          buyerEmail: form.email.trim(),
-          buyerPhone: form.phone.trim(),
-          network,
-          isSandbox: true,
-        });
-      }
-
       if (!res.success || !res.orderRef) {
-        setErrors({ inventory: res.message || 'Payment initiation failed. Please try again.' });
+        let msg = res.message || 'Payment initiation failed. Please try again.';
+        if (res.message?.includes('API disabled')) {
+          msg = 'Relworx Mobile Money API is currently disabled for this merchant account. Please enable API access in the Relworx dashboard at payments.relworx.com to accept customer payments.';
+        }
+        setErrors({ inventory: msg });
         setIsSubmitting(false);
         return;
       }
 
-      // Refresh stock counts
+      // Refresh stock counts from database
       refreshCounts();
 
       // Open Relworx checkout modal
@@ -223,7 +228,13 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             <div className="mt-4 flex items-center justify-between text-xs pt-3 border-t border-white/10 text-slate-400">
               <span>Available Inventory</span>
               <span className="font-semibold text-white font-mono tabular-nums">
-                {publicCounts ? publicCounts.ORDINARY.available : 50} / 50 Remaining
+                {loadingCounts ? (
+                  <span className="text-slate-400 animate-pulse">Loading...</span>
+                ) : publicCounts ? (
+                  `${publicCounts.ORDINARY.available} / ${publicCounts.ORDINARY.total} Remaining`
+                ) : (
+                  <span className="text-amber-400">Database offline</span>
+                )}
               </span>
             </div>
           </button>
@@ -257,12 +268,36 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             <div className="mt-4 flex items-center justify-between text-xs pt-3 border-t border-white/10 text-slate-400">
               <span>Available Inventory</span>
               <span className="font-semibold text-cyan-300 font-mono tabular-nums">
-                {publicCounts ? publicCounts.VIP.available : 20} / 20 Remaining
+                {loadingCounts ? (
+                  <span className="text-slate-400 animate-pulse">Loading...</span>
+                ) : publicCounts ? (
+                  `${publicCounts.VIP.available} / ${publicCounts.VIP.total} Remaining`
+                ) : (
+                  <span className="text-amber-400">Database offline</span>
+                )}
               </span>
             </div>
           </button>
 
         </div>
+
+        {/* Database Offline Error Banner */}
+        {countsError && (
+          <div className="max-w-2xl mb-6 p-4 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>{countsError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={refreshCounts}
+              className="px-2.5 py-1 bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 rounded font-semibold text-[11px] cursor-pointer inline-flex items-center gap-1"
+            >
+              <RefreshCw className={`w-3 h-3 ${loadingCounts ? 'animate-spin' : ''}`} />
+              <span>Retry</span>
+            </button>
+          </div>
+        )}
 
         {/* Global Inventory Alert if low */}
         {errors.inventory && (

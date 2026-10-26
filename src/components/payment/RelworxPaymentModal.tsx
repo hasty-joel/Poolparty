@@ -13,8 +13,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  ShieldCheck,
-  FlaskConical
+  ShieldCheck
 } from 'lucide-react';
 import { TicketService } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
@@ -54,17 +53,6 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [copiedRef, setCopiedRef] = useState(false);
   const [manualChecking, setManualChecking] = useState(false);
-  const [simulating, setSimulating] = useState(false);
-  const [isSandboxMode, setIsSandboxMode] = useState(false);
-
-  // Check admin health to determine if live Relworx or sandbox mode is active
-  useEffect(() => {
-    TicketService.checkAdminHealth().then((health) => {
-      setIsSandboxMode(!health.relworxConfigured);
-    }).catch(() => {
-      setIsSandboxMode(true);
-    });
-  }, []);
 
   // Countdown timer for 10-minute reservation expiry
   useEffect(() => {
@@ -184,24 +172,6 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
     }
   };
 
-  const handleSimulateSandboxApproval = async () => {
-    if (!orderRef) return;
-    setSimulating(true);
-    try {
-      const res = await TicketService.simulateSandboxPaymentSuccess(orderRef);
-      if (res.success && res.status === 'paid' && res.tickets) {
-        setStatus('paid');
-        setIssuedTickets(res.tickets);
-        if (onPaymentSuccess) onPaymentSuccess();
-      } else {
-        setMessage(res.message || 'Simulation response received.');
-      }
-    } catch (err: any) {
-      setMessage('Simulation error: ' + err?.message);
-    } finally {
-      setSimulating(false);
-    }
-  };
 
   const handleDownloadPdf = async () => {
     if (!activeTicket) return;
@@ -377,31 +347,6 @@ export const RelworxPaymentModal: React.FC<RelworxPaymentModalProps> = ({
                   <RefreshCw className={`w-3.5 h-3.5 ${manualChecking ? 'animate-spin' : ''}`} />
                   <span>{manualChecking ? 'Verifying with Relworx...' : 'I Approved on My Phone · Check Status'}</span>
                 </button>
-
-                {/* Clearly Labeled Sandbox Simulation Section (Test QA only) */}
-                {isSandboxMode && (
-                  <div className="p-3.5 bg-[#080c14] border border-amber-400/20 rounded-xl space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-amber-300 font-semibold flex items-center gap-1.5">
-                        <FlaskConical className="w-3.5 h-3.5" />
-                        Sandbox Testing Simulation
-                      </span>
-                      <span className="text-[10px] uppercase font-mono text-slate-500">RELWORX_API_KEY unset</span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      This system is operating in developer sandbox simulation mode. You can simulate the handset PIN authorization to verify ticket generation and gate scanning.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleSimulateSandboxApproval}
-                      disabled={simulating}
-                      className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 border border-amber-400/30 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-colors"
-                    >
-                      {simulating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
-                      <span>{simulating ? 'Simulating...' : 'Simulate Handset Approval (Sandbox QA Test)'}</span>
-                    </button>
-                  </div>
-                )}
               </div>
             </div>
           )}

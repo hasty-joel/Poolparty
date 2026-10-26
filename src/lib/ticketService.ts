@@ -1,30 +1,59 @@
 import { TicketRecord, TicketCategory, InventoryDashboardStats, CheckInResult, PublicInventoryCounts } from '../types/inventory';
 
+let _adminToken: string = '';
+
 export const TicketService = {
-  /**
-   * Public Inventory Counts (Calls secure server endpoint)
-   * Strictly returns counts only; no customer records or QR tokens
-   */
-  async getPublicCounts(): Promise<PublicInventoryCounts> {
+  setAdminToken(token: string) {
+    _adminToken = token;
     try {
-      const res = await fetch('/api/inventory/counts');
-      const data = await res.json();
-      if (data.success && data.counts) {
-        return data.counts;
-      }
-    } catch (err) {
-      console.warn('API getPublicCounts error, using default', err);
+      sessionStorage.setItem('poolparty_admin_passcode', token);
+    } catch {}
+  },
+
+  getAdminToken(): string {
+    if (_adminToken) return _adminToken;
+    try {
+      return sessionStorage.getItem('poolparty_admin_passcode') || '';
+    } catch {
+      return '';
     }
+  },
+
+  getAdminHeaders(): HeadersInit {
+    const token = this.getAdminToken();
     return {
-      VIP: { total: 20, available: 20, priceUgx: 50000 },
-      ORDINARY: { total: 50, available: 50, priceUgx: 20000 },
-      totalAvailable: 70,
-      isLiveSupabase: false,
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'x-admin-key': token,
     };
   },
 
   /**
-   * Health Diagnostics for Admin
+   * Public Inventory Counts (Calls secure server endpoint querying Supabase)
+   * Strictly returns live counts only; no customer records or QR tokens
+   */
+  async getPublicCounts(): Promise<{ success: boolean; counts?: PublicInventoryCounts; error?: string }> {
+    try {
+      const res = await fetch('/api/inventory/counts');
+      const data = await res.json();
+      if (res.ok && data.success && data.counts) {
+        return { success: true, counts: data.counts };
+      }
+      return {
+        success: false,
+        error: data.error || 'Failed to read inventory counts from database.',
+      };
+    } catch (err: any) {
+      console.warn('Network error fetching public counts:', err);
+      return {
+        success: false,
+        error: err?.message || 'Network error connecting to ticketing service.',
+      };
+    }
+  },
+
+  /**
+   * Health Diagnostics for Admin (Database + Gateway)
    */
   async checkAdminHealth(): Promise<{
     supabaseConnected: boolean;
@@ -32,10 +61,13 @@ export const TicketService = {
     table: string;
     totalRecordsFound: number;
     relworxConfigured?: boolean;
+    relworxAccount?: string;
     error?: string;
   }> {
     try {
-      const res = await fetch('/api/admin/health');
+      const res = await fetch('/api/admin/health', {
+        headers: this.getAdminHeaders(),
+      });
       return await res.json();
     } catch (err: any) {
       return {
@@ -50,26 +82,57 @@ export const TicketService = {
   },
 
   /**
-   * Fetch all 70 tickets for authenticated Admin table
+   * Fetch all tickets from Supabase for authenticated Admin table
    */
-  async getAllTickets(): Promise<TicketRecord[]> {
+  async getAllTickets(): Promise<{ success: boolean; tickets: TicketRecord[]; error?: string }> {
     try {
-      const res = await fetch('/api/admin/tickets');
+      const res = await fetch('/api/admin/tickets', {
+        headers: this.getAdminHeaders(),
+      });
       const data = await res.json();
-      if (data.success && data.tickets) {
-        return data.tickets;
+      if (res.status === 401) {
+        return { success: false, tickets: [], error: 'UNAUTHORIZED' };
       }
-    } catch (err) {
-      console.warn('API getAllTickets error', err);
+      if (data.success && Array.isArray(data.tickets)) {
+        return { success: true, tickets: data.tickets };
+      }
+      return { success: false, tickets: [], error: data.error || 'Failed to fetch tickets' };
+    } catch (err: any) {
+      return { success: false, tickets: [], error: err?.message };
     }
-    return [];
   },
 
   /**
-   * Calculate dashboard stats
+   * Fetch all orders from Supabase for authenticated Admin table
    */
-  async getDashboardStats(): Promise<InventoryDashboardStats> {
-    const tickets = await this.getAllTickets();
+  async getAllOrders(): Promise<{ success: boolean; orders: any[]; error?: string }> {
+    try {
+      const res = await fetch('/api/admin/orders', {
+        headers: this.getAdminHeaders(),
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        return { success: false, orders: [], error: 'UNAUTHORIZED' };
+      }
+      if (data.success && Array.isArray(data.orders)) {
+        return { success: true, orders: data.orders };
+      }
+      return { success: false, orders: [], error: data.error || 'Failed to fetch orders' };
+    } catch (err: any) {
+      return { success: false, orders: [], error: err?.message };
+    }
+  },
+
+  /**
+   * Calculate live dashboard statistics from database tickets
+   */
+  async getDashboardStats(): Promise<{ stats: InventoryDashboardStats | null; error?: string }> {
+    const res = await this.getAllTickets();
+    if (!res.success) {
+      return { stats: null, error: res.error };
+    }
+
+    const tickets = res.tickets;
 
     const computeCategory = (cat: TicketCategory, cap: number, price: number) => {
       const catTickets = tickets.filter((t) => t.category === cat);
@@ -101,47 +164,24 @@ export const TicketService = {
     const ordinary = computeCategory('ORDINARY', 50, 20000);
 
     return {
-      vip,
-      ordinary,
-      overall: {
-        totalCapacity: 70,
-        totalAvailable: vip.available + ordinary.available,
-        totalReserved: vip.reserved + ordinary.reserved,
-        totalIssued: vip.issued + ordinary.issued,
-        totalPaid: vip.paid + ordinary.paid,
-        totalCheckedIn: vip.checkedIn + ordinary.checkedIn,
-        totalRevenueUgx: vip.revenueUgx + ordinary.revenueUgx,
+      stats: {
+        vip,
+        ordinary,
+        overall: {
+          totalCapacity: 70,
+          totalAvailable: vip.available + ordinary.available,
+          totalReserved: vip.reserved + ordinary.reserved,
+          totalIssued: vip.issued + ordinary.issued,
+          totalPaid: vip.paid + ordinary.paid,
+          totalCheckedIn: vip.checkedIn + ordinary.checkedIn,
+          totalRevenueUgx: vip.revenueUgx + ordinary.revenueUgx,
+        },
       },
     };
   },
 
   /**
-   * Customer Online Reservation (Calls secure server endpoint)
-   * Prevents overselling with atomic server-side assignment
-   */
-  async allocateTickets(params: {
-    category: TicketCategory;
-    quantity: number;
-    buyerName: string;
-    buyerEmail: string;
-    buyerPhone: string;
-    targetStatus?: 'reserved' | 'issued';
-    paymentStatus?: 'pending' | 'manual_paid' | 'paid';
-  }): Promise<{ success: boolean; message: string; tickets?: TicketRecord[] }> {
-    try {
-      const res = await fetch('/api/tickets/reserve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-      return await res.json();
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Network error creating reservation' };
-    }
-  },
-
-  /**
-   * Staff Record Physical Sale (Calls secure server endpoint)
+   * Staff Record Physical Sale in Supabase (Protected)
    */
   async recordPhysicalSale(params: {
     category: TicketCategory;
@@ -153,7 +193,7 @@ export const TicketService = {
     try {
       const res = await fetch('/api/admin/physical-sale', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAdminHeaders(),
         body: JSON.stringify(params),
       });
       return await res.json();
@@ -163,13 +203,13 @@ export const TicketService = {
   },
 
   /**
-   * Admin confirms payment
+   * Admin confirms payment in Supabase (Protected)
    */
   async confirmPayment(ticketId: string): Promise<boolean> {
     try {
       const res = await fetch('/api/admin/confirm-payment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAdminHeaders(),
         body: JSON.stringify({ ticketId }),
       });
       const data = await res.json();
@@ -180,13 +220,13 @@ export const TicketService = {
   },
 
   /**
-   * Admin releases ticket back to inventory
+   * Admin releases ticket back to inventory in Supabase (Protected)
    */
   async cancelTicket(ticketId: string, releaseToInventory: boolean = true): Promise<boolean> {
     try {
       const res = await fetch('/api/admin/release-ticket', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAdminHeaders(),
         body: JSON.stringify({ ticketId, releaseToInventory }),
       });
       const data = await res.json();
@@ -207,7 +247,6 @@ export const TicketService = {
     buyerEmail: string;
     buyerPhone: string;
     network: 'MTN' | 'AIRTEL';
-    isSandbox?: boolean;
   }): Promise<{
     success: boolean;
     orderRef?: string;
@@ -215,8 +254,6 @@ export const TicketService = {
     relworxInternalRef?: string | null;
     reservedUntil?: string;
     totalAmountUgx?: number;
-    isSandboxTest?: boolean;
-    requiresAction?: boolean;
     tickets?: TicketRecord[];
     error?: string;
   }> {
@@ -230,7 +267,7 @@ export const TicketService = {
     } catch (err: any) {
       return {
         success: false,
-        message: err?.message || 'Network error connecting to Relworx payment gateway.',
+        message: err?.message || 'Network error connecting to payment gateway.',
       };
     }
   },
@@ -250,23 +287,8 @@ export const TicketService = {
   },
 
   /**
-   * Clearly labeled sandbox simulation trigger (available only when RELWORX_API_KEY is unset)
-   */
-  async simulateSandboxPaymentSuccess(orderRef: string): Promise<any> {
-    try {
-      const res = await fetch('/api/payments/relworx-simulate-success', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderRef }),
-      });
-      return await res.json();
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Error simulating sandbox payment' };
-    }
-  },
-
-  /**
    * Check Order Status & Synchronize with Relworx (Live Polling)
+   * Only returns tickets when confirmed 'paid' in Supabase
    */
   async checkOrderStatus(orderRef: string): Promise<{
     success: boolean;
@@ -296,6 +318,7 @@ export const TicketService = {
 
   /**
    * Lookup confirmed tickets by contact phone or order reference
+   * Returns only issued and paid tickets from Supabase
    */
   async lookupTickets(contact: string): Promise<{ success: boolean; count: number; tickets: TicketRecord[]; message?: string }> {
     try {
@@ -316,26 +339,13 @@ export const TicketService = {
   },
 
   /**
-   * Admin fetch all orders
-   */
-  async getAllOrders(): Promise<any[]> {
-    try {
-      const res = await fetch('/api/admin/orders');
-      const data = await res.json();
-      return data.success && data.orders ? data.orders : [];
-    } catch {
-      return [];
-    }
-  },
-
-  /**
-   * Admin verify Relworx transaction
+   * Admin verify Relworx transaction (Protected)
    */
   async verifyRelworxTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
     try {
       const res = await fetch('/api/admin/verify-relworx-transaction', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getAdminHeaders(),
         body: JSON.stringify({ orderRef }),
       });
       return await res.json();
@@ -344,9 +354,6 @@ export const TicketService = {
     }
   },
 
-  /**
-   * Backwards-compatible admin transaction verification wrapper
-   */
   async verifyFlwTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
     return this.verifyRelworxTransactionAdmin(orderRef);
   },

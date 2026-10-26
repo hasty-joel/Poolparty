@@ -27,9 +27,11 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
 
   const loadRecent = async () => {
     try {
-      const all = await TicketService.getAllTickets();
-      const used = all.filter((t) => t.checked_in_at).slice(0, 8);
-      setRecentScans(used);
+      const res = await TicketService.getAllTickets();
+      if (res.success && Array.isArray(res.tickets)) {
+        const used = res.tickets.filter((t: TicketRecord) => t.checked_in_at).slice(0, 8);
+        setRecentScans(used);
+      }
     } catch {
       // ignore
     }

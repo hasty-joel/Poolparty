@@ -121,12 +121,11 @@ export const RelworxService = {
       description: params.description.substring(0, 100),
     };
 
-    if (params.isSandbox || !this.isConfigured() || process.env.RELWORX_SANDBOX === 'true') {
-      console.warn('[Relworx] Running in sandbox simulation mode.');
+    if (!this.isConfigured()) {
       return {
-        success: true,
-        message: `Relworx payment request simulated (Sandbox). Approve prompt to complete test for UGX ${params.amount.toLocaleString()}.`,
-        internal_reference: `sim_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        success: false,
+        message: 'Relworx Mobile Money gateway is not configured. Please supply RELWORX_API_KEY and RELWORX_ACCOUNT_NO in your environment.',
+        error: 'RELWORX_NOT_CONFIGURED',
       };
     }
 
@@ -187,9 +186,9 @@ export const RelworxService = {
 
     if (!this.isConfigured()) {
       return {
-        success: true,
-        status: 'pending',
-        message: 'Sandbox mode active. Awaiting confirmation.',
+        success: false,
+        status: 'unknown',
+        message: 'Relworx API is not configured with RELWORX_API_KEY in environment.',
       };
     }
 

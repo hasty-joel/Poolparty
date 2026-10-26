@@ -64,18 +64,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [copiedSql, setCopiedSql] = useState(false);
 
+  useEffect(() => {
+    const savedToken = TicketService.getAdminToken();
+    if (savedToken) {
+      setPasscode(savedToken);
+      setIsAuthenticated(true);
+    }
+  }, []);
+
   const loadData = async () => {
     setLoading(true);
     try {
-      const [allStats, allTickets, allOrders, health] = await Promise.all([
+      const [statsRes, ticketsRes, ordersRes, health] = await Promise.all([
         TicketService.getDashboardStats(),
         TicketService.getAllTickets(),
         TicketService.getAllOrders(),
         TicketService.checkAdminHealth(),
       ]);
-      setStats(allStats);
-      setTickets(allTickets);
-      setOrders(allOrders);
+
+      if (ticketsRes.error === 'UNAUTHORIZED' || ordersRes.error === 'UNAUTHORIZED') {
+        setIsAuthenticated(false);
+        setAuthError('Unauthorized. Passcode was rejected by server. Default master passcode: prince2026');
+        return;
+      }
+
+      setStats(statsRes.stats);
+      setTickets(ticketsRes.tickets || []);
+      setOrders(ordersRes.orders || []);
       setHealthData(health);
     } catch (err) {
       console.error('Failed to load dashboard data', err);
@@ -109,12 +124,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (passcode === 'prince2026' || passcode === 'admin') {
-      setIsAuthenticated(true);
-      setAuthError('');
-    } else {
-      setAuthError('Invalid Admin Passcode. Default master passcode: prince2026');
+    if (!passcode.trim()) {
+      setAuthError('Please enter the Admin passcode.');
+      return;
     }
+    TicketService.setAdminToken(passcode.trim());
+    setIsAuthenticated(true);
+    setAuthError('');
   };
 
   const handleConfirmPayment = async (ticket: TicketRecord) => {
@@ -161,14 +177,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsSubmittingSale(true);
     try {
-      const res = await TicketService.allocateTickets({
+      const res = await TicketService.recordPhysicalSale({
         category: saleCategory,
         quantity: saleQty,
         buyerName: saleBuyerName,
         buyerEmail: saleBuyerEmail.trim() || `${saleBuyerName.toLowerCase().replace(/\s+/g, '')}@prince.ug`,
         buyerPhone: saleBuyerPhone,
-        targetStatus: 'issued',
-        paymentStatus: 'manual_paid',
       });
 
       if (!res.success) {
