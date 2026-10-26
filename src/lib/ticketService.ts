@@ -26,7 +26,14 @@ export const TicketService = {
   /**
    * Health Diagnostics for Admin
    */
-  async checkAdminHealth(): Promise<{ supabaseConnected: boolean; project: string; table: string; totalRecordsFound: number; error?: string }> {
+  async checkAdminHealth(): Promise<{
+    supabaseConnected: boolean;
+    project: string;
+    table: string;
+    totalRecordsFound: number;
+    relworxConfigured?: boolean;
+    error?: string;
+  }> {
     try {
       const res = await fetch('/api/admin/health');
       return await res.json();
@@ -36,6 +43,7 @@ export const TicketService = {
         project: 'Poolparty',
         table: 'public.tickets',
         totalRecordsFound: 0,
+        relworxConfigured: false,
         error: err?.message || 'Server offline',
       };
     }
@@ -189,9 +197,10 @@ export const TicketService = {
   },
 
   /**
-   * Initiate Flutterwave Uganda Mobile Money Checkout
+   * Initiate Relworx Uganda Mobile Money Checkout (MTN MoMo & Airtel Money)
+   * Official Relworx API: https://payments.relworx.com/docs
    */
-  async initiateFlutterwavePayment(payload: {
+  async initiateRelworxPayment(payload: {
     category: TicketCategory;
     quantity: number;
     buyerName: string;
@@ -202,9 +211,7 @@ export const TicketService = {
     success: boolean;
     orderRef?: string;
     message: string;
-    authUrl?: string | null;
-    flwRef?: string | null;
-    flwTransactionId?: number | string | null;
+    relworxInternalRef?: string | null;
     reservedUntil?: string;
     totalAmountUgx?: number;
     isSandboxTest?: boolean;
@@ -213,7 +220,7 @@ export const TicketService = {
     error?: string;
   }> {
     try {
-      const res = await fetch('/api/payments/flutterwave-initiate', {
+      const res = await fetch('/api/payments/relworx-initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -222,13 +229,27 @@ export const TicketService = {
     } catch (err: any) {
       return {
         success: false,
-        message: err?.message || 'Network error connecting to payment gateway.',
+        message: err?.message || 'Network error connecting to Relworx payment gateway.',
       };
     }
   },
 
   /**
-   * Check Order Status & Synchronize with Flutterwave (Live Polling)
+   * Backwards-compatible wrapper pointing to Relworx
+   */
+  async initiateFlutterwavePayment(payload: {
+    category: TicketCategory;
+    quantity: number;
+    buyerName: string;
+    buyerEmail: string;
+    buyerPhone: string;
+    network: 'MTN' | 'AIRTEL';
+  }) {
+    return this.initiateRelworxPayment(payload);
+  },
+
+  /**
+   * Check Order Status & Synchronize with Relworx (Live Polling)
    */
   async checkOrderStatus(orderRef: string): Promise<{
     success: boolean;
@@ -291,11 +312,11 @@ export const TicketService = {
   },
 
   /**
-   * Admin verify FLW transaction
+   * Admin verify Relworx transaction
    */
-  async verifyFlwTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
+  async verifyRelworxTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
     try {
-      const res = await fetch('/api/admin/verify-flw-transaction', {
+      const res = await fetch('/api/admin/verify-relworx-transaction', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orderRef }),
@@ -304,6 +325,13 @@ export const TicketService = {
     } catch (err: any) {
       return { success: false, message: err?.message || 'Verification error' };
     }
+  },
+
+  /**
+   * Backwards-compatible admin transaction verification wrapper
+   */
+  async verifyFlwTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
+    return this.verifyRelworxTransactionAdmin(orderRef);
   },
 
   /**

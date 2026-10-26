@@ -3,7 +3,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { SupabaseServerService } from './src/server/supabaseServer';
-import { FlutterwaveService } from './src/server/flutterwaveService';
 import { RelworxService } from './src/server/relworxService';
 
 dotenv.config();
@@ -35,11 +34,13 @@ async function startServer() {
   });
 
   /**
-   * Flutterwave Uganda Mobile Money Payment Initiation
-   * Calculates trusted server price, atomically locks inventory with 10-minute expiry,
-   * and initiates direct charge via official Flutterwave Uganda Mobile Money API.
+   * Relworx Uganda Mobile Money Payment Initiation (MTN & Airtel)
+   * Official Relworx API: https://payments.relworx.com/docs
+   * 1. Validates inputs & calculates trusted server price (UGX 20,000 Ordinary, UGX 50,000 VIP)
+   * 2. Atomically reserves tickets with a 10-minute expiry to prevent overselling
+   * 3. Triggers Relworx Mobile Money Request-Payment push to customer handset
    */
-  app.post('/api/payments/flutterwave-initiate', async (req, res) => {
+  app.post('/api/payments/relworx-initiate', async (req, res) => {
     try {
       const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = req.body;
 
@@ -51,25 +52,20 @@ async function startServer() {
       }
 
       if (category !== 'VIP' && category !== 'ORDINARY') {
-        return res.status(400).json({ success: false, message: 'Invalid ticket category.' });
+        return res.status(400).json({ success: false, message: 'Invalid ticket category. Must be VIP or ORDINARY.' });
       }
 
       if (network !== 'MTN' && network !== 'AIRTEL') {
         return res.status(400).json({ success: false, message: 'Network must be MTN or AIRTEL.' });
       }
 
-      const appUrl =
-        process.env.APP_URL ||
-        `${req.protocol}://${req.get('host')}`;
-
-      const result = await SupabaseServerService.initiateFlutterwavePayment({
+      const result = await SupabaseServerService.initiateRelworxPayment({
         category,
         quantity: parseInt(quantity, 10),
         buyerName,
         buyerEmail,
         buyerPhone,
         network,
-        appUrl,
       });
 
       if (!result.success) {
@@ -78,53 +74,101 @@ async function startServer() {
 
       res.json(result);
     } catch (err: any) {
-      console.error('Payment initiation route error:', err);
+      console.error('Relworx payment initiation route error:', err);
       res.status(500).json({ success: false, message: err?.message || 'Server error initiating payment.' });
     }
   });
 
-  /**
-   * Flutterwave Webhook Listener
-   * Receives notifications from Flutterwave upon successful charge
-   * Strictly verifies webhook signature (verif-hash) and double-checks
-   * with Flutterwave server-side verification API before issuing tickets.
-   */
-  app.post('/api/payments/flutterwave-webhook', async (req, res) => {
+  // Backwards-compatible alias for any in-flight client requests
+  app.post('/api/payments/flutterwave-initiate', async (req, res) => {
     try {
-      const signature = req.headers['verif-hash'] as string | undefined;
+      const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = req.body;
+      const result = await SupabaseServerService.initiateRelworxPayment({
+        category: category || 'ORDINARY',
+        quantity: parseInt(quantity, 10) || 1,
+        buyerName: buyerName || '',
+        buyerEmail: buyerEmail || '',
+        buyerPhone: buyerPhone || '',
+        network: network || 'MTN',
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message });
+    }
+  });
 
-      // Check webhook signature hash
-      if (!FlutterwaveService.verifyWebhookSignature(signature)) {
-        console.warn('Unauthorized Flutterwave webhook signature attempt.');
-        return res.status(401).json({ status: 'error', message: 'Invalid signature hash' });
+  /**
+   * Official Relworx Webhook Listener
+   * Documentation: https://payments.relworx.com/docs
+   * Receives notifications from Relworx upon transaction state changes (pending -> success / failed)
+   * Strictly verifies cryptographic signature header (Relworx-Signature)
+   * and double-checks server-side with Relworx verification API before issuing tickets.
+   */
+  app.post('/api/payments/relworx-webhook', async (req, res) => {
+    try {
+      // Signature header can come as Relworx-Signature or lowercase
+      const signature = (req.headers['relworx-signature'] || req.headers['Relworx-Signature'] || req.headers['signature']) as string | undefined;
+
+      // Cryptographic signature check
+      if (!RelworxService.verifyWebhookSignature(signature, req.body)) {
+        console.warn('[Relworx Webhook] Unauthorized webhook signature attempt rejected.');
+        return res.status(401).json({ status: 'error', message: 'Invalid webhook signature' });
       }
 
-      const { event, data } = req.body;
+      const body = req.body || {};
+      const rawStatus = String(body.status || body.transaction_status || '').toLowerCase();
+      const orderRef = body.customer_reference || body.reference || body.order_ref;
+      const internalRef = body.internal_reference;
+      const amount = body.amount ? Number(body.amount) : undefined;
+      const currency = body.currency;
 
-      // Only handle charge completion
-      if (event === 'charge.completed' && data && data.status === 'successful') {
-        const transactionId = data.id;
-        const txRef = data.tx_ref;
+      if (!orderRef) {
+        console.warn('[Relworx Webhook] Webhook payload missing order reference.');
+        return res.status(200).json({ status: 'ignored', message: 'Missing order reference' });
+      }
 
-        // Verify transaction server-side directly with Flutterwave API
-        const verified = await FlutterwaveService.verifyTransactionById(transactionId);
+      // Handle successful payment
+      if (['success', 'successful', 'completed', 'paid'].includes(rawStatus)) {
+        // Independent verification with Relworx API (if live API key configured)
+        if (RelworxService.isConfigured()) {
+          const verification = await RelworxService.checkRequestStatus({
+            internalReference: internalRef,
+            reference: orderRef,
+          });
 
-        if (
-          verified.success &&
-          verified.status === 'successful' &&
-          verified.currency === 'UGX' &&
-          verified.tx_ref === txRef
-        ) {
-          // Idempotently issue tickets and mark order as paid
-          await SupabaseServerService.markOrderAsPaid(txRef, verified);
-          return res.status(200).json({ status: 'success', message: 'Order payment verified and issued' });
+          if (!verification.success || verification.status !== 'success') {
+            console.warn(`[Relworx Webhook] Double-check verification did not confirm success: status=${verification.status}`);
+            return res.status(200).json({ status: 'unverified', message: 'Relworx status check not yet success' });
+          }
+
+          // Currency and amount verification
+          if (verification.currency && verification.currency !== 'UGX') {
+            console.warn(`[Relworx Webhook] Invalid currency: ${verification.currency}`);
+            return res.status(400).json({ status: 'error', message: 'Invalid currency' });
+          }
         }
+
+        // Idempotently mark order as paid & issue attendee tickets
+        await SupabaseServerService.markOrderAsPaid(orderRef, {
+          relworx: body,
+          relworx_internal_ref: internalRef,
+          amount,
+          currency: currency || 'UGX',
+        });
+
+        return res.status(200).json({ status: 'success', message: 'Order payment verified and tickets issued' });
+      }
+
+      // Handle failed or cancelled payment
+      if (['failed', 'declined', 'cancelled', 'expired', 'rejected'].includes(rawStatus)) {
+        await SupabaseServerService.releaseReservationByOrderRef(orderRef);
+        return res.status(200).json({ status: 'success', message: 'Order marked failed and inventory released' });
       }
 
       // Acknowledge receipt
       res.status(200).json({ status: 'ignored' });
     } catch (err: any) {
-      console.error('Flutterwave webhook processing error:', err);
+      console.error('[Relworx Webhook Error]', err);
       res.status(500).json({ status: 'error', message: err?.message });
     }
   });
@@ -189,7 +233,7 @@ async function startServer() {
   // ============================================================
 
   /**
-   * Health Check & Diagnostics (Supabase + Flutterwave)
+   * Health Check & Diagnostics (Supabase + Relworx)
    */
   app.get('/api/admin/health', async (req, res) => {
     const health = await SupabaseServerService.checkConnection();
@@ -198,8 +242,8 @@ async function startServer() {
       project: 'Poolparty',
       table: 'public.tickets',
       totalRecordsFound: health.count,
-      flutterwaveConfigured: FlutterwaveService.isConfigured(),
-      flutterwaveTestMode: FlutterwaveService.isTestMode(),
+      relworxConfigured: RelworxService.isConfigured(),
+      relworxAccount: RelworxService.getAccountNo() ? 'Configured' : 'Using default',
       error: health.error,
     });
   });
@@ -229,20 +273,27 @@ async function startServer() {
   });
 
   /**
-   * Admin Trigger: Manually verify pending transaction with Flutterwave API
+   * Admin Trigger: Manually verify pending transaction with Relworx API
    */
-  app.post('/api/admin/verify-flw-transaction', async (req, res) => {
+  app.post('/api/admin/verify-relworx-transaction', async (req, res) => {
     try {
       const { orderRef } = req.body;
       if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef required' });
 
-      const flwVerify = await FlutterwaveService.verifyTransactionByRef(orderRef);
-      if (flwVerify.success && flwVerify.status === 'successful') {
-        await SupabaseServerService.markOrderAsPaid(orderRef, flwVerify);
-        return res.json({ success: true, message: 'Transaction verified and marked paid on Supabase!', flwVerify });
-      }
+      const result = await SupabaseServerService.verifyRelworxOrderDirectly(orderRef);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message });
+    }
+  });
 
-      res.json({ success: false, message: `Flutterwave status: ${flwVerify.status}`, flwVerify });
+  // Backwards-compatible admin alias
+  app.post('/api/admin/verify-flw-transaction', async (req, res) => {
+    try {
+      const { orderRef } = req.body;
+      if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef required' });
+      const result = await SupabaseServerService.verifyRelworxOrderDirectly(orderRef);
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ success: false, message: err?.message });
     }

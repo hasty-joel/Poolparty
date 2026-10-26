@@ -84,18 +84,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleVerifyFlwOrder = async (orderRef: string) => {
+  const handleVerifyRelworxOrder = async (orderRef: string) => {
     setVerifyingOrderRef(orderRef);
     try {
-      const res = await TicketService.verifyFlwTransactionAdmin(orderRef);
+      const res = await TicketService.verifyRelworxTransactionAdmin(orderRef);
       if (res.success) {
-        setActionSuccess(`Flutterwave verified: Order ${orderRef} is confirmed & paid!`);
+        setActionSuccess(`Relworx verified: Order ${orderRef} is confirmed & paid!`);
         await loadData();
       } else {
-        alert(res.message || 'Flutterwave status not successful yet.');
+        alert(res.message || 'Relworx payment not confirmed yet.');
       }
     } catch (err: any) {
-      alert('Error verifying with Flutterwave: ' + err?.message);
+      alert('Error verifying with Relworx: ' + err?.message);
     } finally {
       setVerifyingOrderRef(null);
     }
@@ -582,7 +582,7 @@ order by category;`;
               activeTab === 'orders' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
             }`}
           >
-            <span>Flutterwave Orders & Sales</span>
+            <span>Relworx Orders & Sales</span>
             <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-800 text-amber-300 font-mono">
               {orders.length}
             </span>
@@ -601,7 +601,7 @@ order by category;`;
               activeTab === 'setup_guide' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
             }`}
           >
-            Supabase & Flutterwave Setup
+            Supabase & Relworx Setup
           </button>
         </div>
 
@@ -834,9 +834,9 @@ order by category;`;
                         <tr key={ord.id} className="hover:bg-white/[0.02]">
                           <td className="py-3 px-3 font-mono font-bold text-cyan-300">
                             {ord.order_ref}
-                            {ord.flw_ref && (
+                            {(ord.relworx_internal_ref || ord.flw_ref) && (
                               <span className="block text-[10px] font-normal text-slate-500 font-mono">
-                                FLW: {ord.flw_ref}
+                                Relworx: {ord.relworx_internal_ref || ord.flw_ref}
                               </span>
                             )}
                           </td>
@@ -882,13 +882,13 @@ order by category;`;
                             <div className="flex items-center justify-end gap-1.5">
                               {isPending && (
                                 <button
-                                  onClick={() => handleVerifyFlwOrder(ord.order_ref)}
+                                  onClick={() => handleVerifyRelworxOrder(ord.order_ref)}
                                   disabled={verifyingOrderRef === ord.order_ref}
                                   className="px-2.5 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-200 text-[11px] font-bold rounded-lg cursor-pointer flex items-center gap-1"
-                                  title="Check with Flutterwave API"
+                                  title="Check status with Relworx API"
                                 >
                                   <RefreshCw className={`w-3 h-3 ${verifyingOrderRef === ord.order_ref ? 'animate-spin' : ''}`} />
-                                  <span>Verify FLW</span>
+                                  <span>Verify Relworx</span>
                                 </button>
                               )}
 
@@ -1059,31 +1059,31 @@ order by category;`;
               {exactUserSql}
             </pre>
 
-            {/* Flutterwave Webhook and Vercel Setup */}
+            {/* Relworx Webhook and Vercel Setup */}
             <div className="pt-4 border-t border-white/10 space-y-4">
               <h4 className="text-base font-bold text-white flex items-center gap-2">
                 <Smartphone className="w-4 h-4 text-amber-400" />
-                <span>Flutterwave Uganda Mobile Money Configuration</span>
+                <span>Relworx Uganda Mobile Money Configuration (MTN & Airtel)</span>
               </h4>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                 <div className="p-4 rounded-xl bg-[#030712] border border-white/10 space-y-2">
-                  <span className="font-bold text-amber-300 block">1. Flutterwave Webhook URL</span>
+                  <span className="font-bold text-amber-300 block">1. Relworx Webhook URL</span>
                   <p className="text-slate-400 leading-relaxed">
-                    Set this in your Flutterwave Dashboard under <strong>Settings &gt; Webhooks</strong>:
+                    Set this in your Relworx Dashboard under <strong>Business Account &gt; Settings &gt; Webhooks</strong>:
                   </p>
                   <code className="block p-2 rounded bg-black/60 font-mono text-[11px] text-cyan-300 break-all select-all">
-                    {window.location.origin}/api/payments/flutterwave-webhook
+                    {window.location.origin}/api/payments/relworx-webhook
                   </code>
                 </div>
 
                 <div className="p-4 rounded-xl bg-[#030712] border border-white/10 space-y-2">
-                  <span className="font-bold text-cyan-300 block">2. Secret Hash Verification</span>
+                  <span className="font-bold text-cyan-300 block">2. Relworx Signature Verification</span>
                   <p className="text-slate-400 leading-relaxed">
-                    Enter any secure string as your secret hash in Flutterwave and add it to your Vercel / server environment variables as:
+                    Copy your Webhook Authentication Key from Relworx Settings and add it to your Vercel / server environment variables as:
                   </p>
                   <code className="block p-2 rounded bg-black/60 font-mono text-[11px] text-amber-300">
-                    FLUTTERWAVE_WEBHOOK_HASH=your_secret_hash_here
+                    RELWORX_WEBHOOK_SECRET=your_webhook_key_here
                   </code>
                 </div>
               </div>
@@ -1092,15 +1092,16 @@ order by category;`;
               <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-2 text-xs">
                 <span className="font-bold text-slate-200 block">3. Required Environment Variables</span>
                 <pre className="p-3 bg-[#030712] rounded-lg text-emerald-300 font-mono text-[11px] leading-relaxed overflow-x-auto">
-{`# Supabase (Project: Poolparty)
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
+{`# Relworx Payment Gateway (Uganda Mobile Money)
+RELWORX_API_KEY=your_relworx_api_key
+RELWORX_ACCOUNT_NO=your_relworx_account_no
+RELWORX_WEBHOOK_SECRET=your_webhook_secret
 
-# Flutterwave Uganda Mobile Money
-FLUTTERWAVE_PUBLIC_KEY=FLWPUBK_TEST-...
-FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-...
-FLUTTERWAVE_WEBHOOK_HASH=your_webhook_secret_hash`}
+# Supabase Database (Project: Poolparty)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOi...`}
                 </pre>
               </div>
             </div>

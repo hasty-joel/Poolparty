@@ -16,7 +16,7 @@ import {
 import { EVENT_DATA, TICKET_TIERS, TicketTier, PaymentMethod, BuyerForm } from '../types/event';
 import { TicketService } from '../lib/ticketService';
 import { TicketRecord, PublicInventoryCounts } from '../types/inventory';
-import { FlutterwavePaymentModal } from './payment/FlutterwavePaymentModal';
+import { RelworxPaymentModal } from './payment/RelworxPaymentModal';
 import { TicketLookupModal } from './ticket/TicketLookupModal';
 
 interface TicketPurchaseProps {
@@ -39,11 +39,10 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [publicCounts, setPublicCounts] = useState<PublicInventoryCounts | null>(null);
 
-  // Flutterwave Checkout Modal State
+  // Relworx Checkout Modal State
   const [checkoutModal, setCheckoutModal] = useState<{
     orderRef: string;
     message: string;
-    authUrl?: string | null;
     reservedUntil?: string | null;
     totalAmountUgx?: number;
     buyerName?: string;
@@ -117,7 +116,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     setErrors({});
 
     try {
-      const res = await TicketService.initiateFlutterwavePayment({
+      const res = await TicketService.initiateRelworxPayment({
         category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
         quantity,
         buyerName: form.fullName.trim(),
@@ -135,11 +134,10 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
       // Refresh stock counts
       refreshCounts();
 
-      // Open Flutterwave prompt modal
+      // Open Relworx prompt modal
       setCheckoutModal({
         orderRef: res.orderRef,
         message: res.message,
-        authUrl: res.authUrl,
         reservedUntil: res.reservedUntil,
         totalAmountUgx: res.totalAmountUgx || totalPrice,
         buyerName: form.fullName.trim(),
@@ -161,7 +159,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         <div className="text-center max-w-xl mx-auto mb-10">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/20 text-xs font-bold tracking-widest text-amber-400 uppercase mb-3">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            {publicCounts?.isLiveSupabase ? 'Supabase Inventory & Flutterwave Active' : 'Pre-Allocated Stock Active (70 Tickets)'}
+            {publicCounts?.isLiveSupabase ? 'Supabase Inventory & Relworx Active' : 'Pre-Allocated Stock Active (70 Tickets)'}
           </div>
           <h2 className="text-3xl sm:text-5xl font-black text-white font-display">
             Select Your Pass
@@ -464,7 +462,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   {isSubmitting ? (
                     <div className="flex items-center gap-2">
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>LOCKING INVENTORY & CALLING FLUTTERWAVE...</span>
+                      <span>LOCKING INVENTORY & CALLING RELWORX...</span>
                     </div>
                   ) : (
                     <>
@@ -476,7 +474,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
                 <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 mt-3">
                   <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                  <span>10-Minute Lock · Official Flutterwave Uganda Integration · RSVP: {EVENT_DATA.rsvpPhone}</span>
+                  <span>10-Minute Lock · Official Relworx Uganda Mobile Money · RSVP: {EVENT_DATA.rsvpPhone}</span>
                 </div>
               </div>
             </form>
@@ -486,12 +484,11 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
       </div>
 
-      {/* Flutterwave Checkout Modal */}
+      {/* Relworx Checkout Modal */}
       {checkoutModal && (
-        <FlutterwavePaymentModal
+        <RelworxPaymentModal
           orderRef={checkoutModal.orderRef}
           initialMessage={checkoutModal.message}
-          authUrl={checkoutModal.authUrl}
           reservedUntil={checkoutModal.reservedUntil}
           totalAmountUgx={checkoutModal.totalAmountUgx}
           buyerName={checkoutModal.buyerName}

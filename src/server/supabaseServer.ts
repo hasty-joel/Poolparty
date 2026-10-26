@@ -1,6 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { FlutterwaveService } from './flutterwaveService';
 import { RelworxService } from './relworxService';
 import { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order';
 
@@ -10,7 +9,15 @@ dotenv.config();
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export const isLiveSupabaseAvailable = Boolean(supabaseUrl && supabaseServiceRoleKey);
+export const isLiveSupabaseAvailable = Boolean(
+  supabaseUrl &&
+  supabaseServiceRoleKey &&
+  !supabaseUrl.includes('your-project') &&
+  !supabaseUrl.includes('placeholder') &&
+  !supabaseUrl.includes('example') &&
+  supabaseUrl.startsWith('https://') &&
+  supabaseServiceRoleKey.length > 20
+);
 
 // Create Supabase Admin client with service-role key (Bypasses RLS safely on server only)
 export const supabaseAdmin: SupabaseClient | null = isLiveSupabaseAvailable
@@ -53,6 +60,7 @@ export interface TicketRow {
   checked_in_at: string | null;
   order_ref?: string | null;
   reserved_until?: string | null;
+  relworx_internal_ref?: string | null;
   flw_transaction_id?: string | null;
 }
 
@@ -277,10 +285,7 @@ export const SupabaseServerService = {
   },
 
   /**
-   * Flutterwave Uganda Mobile Money Checkout Initiation
-   * 1. Validates inputs & calculates trusted server price (no client tampering)
-   * 2. Atomically reserves tickets with a 10-minute expiry
-   * 3. Calls Flutterwave Uganda Mobile Money API
+   * Backwards-compatible delegate pointing to official Relworx payment initiation
    */
   async initiateFlutterwavePayment(params: {
     category: 'VIP' | 'ORDINARY';
@@ -289,252 +294,16 @@ export const SupabaseServerService = {
     buyerEmail: string;
     buyerPhone: string;
     network: PaymentNetwork;
-    appUrl: string;
-  }): Promise<{
-    success: boolean;
-    orderRef?: string;
-    message: string;
-    authUrl?: string | null;
-    flwRef?: string | null;
-    flwTransactionId?: number | string | null;
-    reservedUntil?: string;
-    totalAmountUgx?: number;
-    isSandboxTest?: boolean;
-    requiresAction?: boolean;
-    error?: string;
-  }> {
-    const { category, quantity, buyerName, buyerEmail, buyerPhone, network, appUrl } = params;
-
-    // Validate quantities
-    if (quantity < 1 || quantity > 10) {
-      return { success: false, message: 'Invalid ticket quantity (minimum 1, maximum 10).' };
-    }
-
-    // Trusted prices enforced strictly on server
-    const unitPrice = category === 'VIP' ? 50000 : 20000;
-    const totalAmount = unitPrice * quantity;
-
-    // Release any stale expired reservations first
-    await this.releaseExpiredReservations();
-
-    // Generate unique order reference (tx_ref)
-    const timestamp = Date.now();
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const orderRef = `PP-UGX-${timestamp}-${randomSuffix}`;
-    const reservedUntil = new Date(timestamp + 10 * 60 * 1000).toISOString(); // 10 minutes
-
-    // Format phone number
-    const { international: phoneIntl } = FlutterwaveService.formatUgandaPhone(buyerPhone);
-
-    // Atomically claim tickets
-    let allocatedTicketIds: string[] = [];
-
-    if (supabaseAdmin) {
-      try {
-        const { data: available, error: fetchErr } = await supabaseAdmin
-          .from('tickets')
-          .select('id, ticket_number')
-          .eq('category', category)
-          .eq('status', 'available')
-          .order('ticket_number', { ascending: true })
-          .limit(quantity);
-
-        if (fetchErr || !available || available.length < quantity) {
-          const count = available?.length || 0;
-          return {
-            success: false,
-            message: `Insufficient inventory! Only ${count} ${category} ticket(s) currently available.`,
-          };
-        }
-
-        allocatedTicketIds = available.map((t) => t.id);
-
-        // Lock these tickets with 10-minute expiry
-        let updateRes = await supabaseAdmin
-          .from('tickets')
-          .update({
-            status: 'reserved',
-            payment_status: 'pending',
-            buyer_name: buyerName.trim(),
-            buyer_email: buyerEmail.trim(),
-            buyer_phone: buyerPhone.trim(),
-            order_ref: orderRef,
-            reserved_until: reservedUntil,
-          })
-          .in('id', allocatedTicketIds);
-
-        // If 'order_ref' column has not been added to live Supabase tickets table yet,
-        // update with existing core columns
-        if (updateRes.error && updateRes.error.message?.includes('order_ref')) {
-          updateRes = await supabaseAdmin
-            .from('tickets')
-            .update({
-              status: 'reserved',
-              payment_status: 'pending',
-              buyer_name: buyerName.trim(),
-              buyer_email: buyerEmail.trim(),
-              buyer_phone: buyerPhone.trim(),
-            })
-            .in('id', allocatedTicketIds);
-        }
-
-        if (updateRes.error) {
-          throw updateRes.error;
-        }
-
-        // Always store order in memory tracking store
-        serverOrdersStore.unshift({
-          id: generateUuid(),
-          order_ref: orderRef,
-          category,
-          quantity,
-          unit_price_ugx: unitPrice,
-          total_amount_ugx: totalAmount,
-          status: 'pending',
-          payment_method: 'mobile_money_uganda',
-          network,
-          buyer_name: buyerName.trim(),
-          buyer_email: buyerEmail.trim(),
-          buyer_phone: buyerPhone.trim(),
-          reserved_until: reservedUntil,
-          created_at: new Date().toISOString(),
-        });
-
-        // Also record order in public.orders table if table exists
-        try {
-          await supabaseAdmin.from('orders').insert({
-            order_ref: orderRef,
-            category,
-            quantity,
-            unit_price_ugx: unitPrice,
-            total_amount_ugx: totalAmount,
-            status: 'pending',
-            payment_method: 'mobile_money_uganda',
-            network,
-            buyer_name: buyerName.trim(),
-            buyer_email: buyerEmail.trim(),
-            buyer_phone: buyerPhone.trim(),
-            reserved_until: reservedUntil,
-          });
-        } catch {
-          // public.orders table optional until migration is executed
-        }
-      } catch (err: any) {
-        console.error('Database reservation error:', err);
-        return {
-          success: false,
-          message: err?.message || 'Database error reserving tickets.',
-        };
-      }
-    } else {
-      // In-memory fallback
-      const available = serverMemoryStore.filter((t) => t.category === category && t.status === 'available');
-      if (available.length < quantity) {
-        return {
-          success: false,
-          message: `Insufficient inventory! Only ${available.length} ${category} ticket(s) currently available.`,
-        };
-      }
-
-      for (let i = 0; i < quantity; i++) {
-        const t = available[i];
-        t.status = 'reserved';
-        t.payment_status = 'pending';
-        t.buyer_name = buyerName.trim();
-        t.buyer_email = buyerEmail.trim();
-        t.buyer_phone = buyerPhone.trim();
-        t.order_ref = orderRef;
-        t.reserved_until = reservedUntil;
-        allocatedTicketIds.push(t.id);
-      }
-
-      serverOrdersStore.push({
-        id: generateUuid(),
-        order_ref: orderRef,
-        category,
-        quantity,
-        unit_price_ugx: unitPrice,
-        total_amount_ugx: totalAmount,
-        status: 'pending',
-        payment_method: 'mobile_money_uganda',
-        network,
-        buyer_name: buyerName.trim(),
-        buyer_email: buyerEmail.trim(),
-        buyer_phone: buyerPhone.trim(),
-        reserved_until: reservedUntil,
-        created_at: new Date().toISOString(),
-      });
-    }
-
-    // Call Flutterwave Uganda Mobile Money API if configured
-    if (FlutterwaveService.isConfigured()) {
-      const flwResult = await FlutterwaveService.initiateMobileMoneyCharge({
-        tx_ref: orderRef,
-        amount: totalAmount,
-        currency: 'UGX',
-        network,
-        email: buyerEmail.trim(),
-        phone_number: phoneIntl,
-        fullname: buyerName.trim(),
-        redirect_url: `${appUrl}/?tx_ref=${orderRef}`,
-      });
-
-      if (!flwResult.success) {
-        // Release the reservation immediately so tickets aren't locked if Flutterwave rejected
-        await this.releaseReservationByOrderRef(orderRef);
-        return {
-          success: false,
-          message: flwResult.message,
-          error: 'FLUTTERWAVE_CHARGE_DECLINED',
-        };
-      }
-
-      // Update order with Flutterwave references
-      if (supabaseAdmin) {
-        await supabaseAdmin
-          .from('orders')
-          .update({
-            flw_ref: flwResult.flwRef,
-            flw_transaction_id: String(flwResult.flwTransactionId || ''),
-            auth_url: flwResult.authUrl,
-          })
-          .eq('order_ref', orderRef);
-      } else {
-        const ord = serverOrdersStore.find((o) => o.order_ref === orderRef);
-        if (ord) {
-          ord.flw_ref = flwResult.flwRef;
-          ord.flw_transaction_id = String(flwResult.flwTransactionId || '');
-          ord.auth_url = flwResult.authUrl;
-        }
-      }
-
-      return {
-        success: true,
-        orderRef,
-        message: flwResult.message,
-        authUrl: flwResult.authUrl,
-        flwRef: flwResult.flwRef,
-        flwTransactionId: flwResult.flwTransactionId,
-        reservedUntil,
-        totalAmountUgx: totalAmount,
-        isSandboxTest: FlutterwaveService.isTestMode(),
-        requiresAction: flwResult.requiresHandsetApproval,
-      };
-    }
-
-    // If Flutterwave is NOT yet configured in environment:
-    // Honest diagnostic: keep reservation alive for 10 minutes so admin can view/test,
-    // and provide instructions without faking payment completion.
-    return {
-      success: true,
-      orderRef,
-      message: `Reservation locked for 10 minutes (UGX ${totalAmount.toLocaleString()}). Flutterwave live credentials pending in .env.`,
-      authUrl: null,
-      reservedUntil,
-      totalAmountUgx: totalAmount,
-      isSandboxTest: true,
-      requiresAction: true,
-    };
+    appUrl?: string;
+  }) {
+    return this.initiateRelworxPayment({
+      category: params.category,
+      quantity: params.quantity,
+      buyerName: params.buyerName,
+      buyerEmail: params.buyerEmail,
+      buyerPhone: params.buyerPhone,
+      network: params.network,
+    });
   },
 
   /**
@@ -954,28 +723,6 @@ export const SupabaseServerService = {
       }
     }
 
-    // If still pending, query Flutterwave verification API if applicable
-    if (order.status === 'pending' && FlutterwaveService.isConfigured() && !order.order_ref.startsWith('PP-RWX-')) {
-      try {
-        const flwVerify = await FlutterwaveService.verifyTransactionByRef(orderRef);
-        if (
-          flwVerify.success &&
-          flwVerify.status === 'successful' &&
-          flwVerify.currency === 'UGX' &&
-          flwVerify.amount >= order.total_amount_ugx
-        ) {
-          // Confirmed payment on Flutterwave! Mark order as paid atomically
-          await this.markOrderAsPaid(orderRef, flwVerify);
-
-          // Re-fetch updated tickets
-          const updatedStatus = await this.getOrderStatus(orderRef);
-          return updatedStatus;
-        }
-      } catch (err) {
-        console.warn('Error polling Flutterwave verification:', err);
-      }
-    }
-
     const secondsRemaining = Math.max(0, Math.floor((expiry - now) / 1000));
 
     return {
@@ -1010,10 +757,11 @@ export const SupabaseServerService = {
             status: 'issued',
             payment_status: 'paid',
             paid_at: now,
+            relworx_internal_ref: flwRef,
           })
           .eq('order_ref', orderRef);
 
-        if (tErr && tErr.message?.includes('order_ref')) {
+        if (tErr && (tErr.message?.includes('order_ref') || tErr.message?.includes('relworx_internal_ref'))) {
           const ord = serverOrdersStore.find((o) => o.order_ref === orderRef);
           if (ord) {
             await supabaseAdmin
@@ -1036,6 +784,7 @@ export const SupabaseServerService = {
             .update({
               status: 'paid',
               paid_at: now,
+              relworx_internal_ref: flwRef,
               flw_transaction_id: flwTxId,
               flw_ref: flwRef,
             })
@@ -1056,6 +805,7 @@ export const SupabaseServerService = {
         t.status = 'issued';
         t.payment_status = 'paid';
         t.paid_at = now;
+        t.relworx_internal_ref = flwRef;
         t.flw_transaction_id = flwTxId;
       }
     });
@@ -1064,11 +814,9 @@ export const SupabaseServerService = {
     if (ord) {
       ord.status = 'paid';
       ord.paid_at = now;
+      ord.relworx_internal_ref = flwRef;
       ord.flw_transaction_id = flwTxId;
       ord.flw_ref = flwRef;
-      if (paymentData?.relworx_internal_ref) {
-        ord.relworx_internal_ref = paymentData.relworx_internal_ref;
-      }
     }
 
     return true;

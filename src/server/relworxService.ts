@@ -6,7 +6,7 @@ dotenv.config();
 /**
  * Official Relworx Payments API Service for Uganda Mobile Money (MTN & Airtel)
  * Base URL: https://payments.relworx.com/api
- * Docs: https://payments.relworx.com/docs
+ * Documentation: https://payments.relworx.com/docs
  */
 export interface RelworxPaymentRequestPayload {
   account_no: string;
@@ -55,6 +55,7 @@ export const RelworxService = {
 
   /**
    * Format phone number to Relworx MSISDN specification (+256XXXXXXXXX)
+   * Supports both 07XXXXXXXX and 03XXXXXXXX Uganda prefixes
    */
   formatUgandaMsisdn(phone: string): { msisdn: string; local: string; valid: boolean } {
     let clean = phone.replace(/[\s\-\(\)]/g, '');
@@ -67,7 +68,8 @@ export const RelworxService = {
       clean = clean.substring(1);
     }
 
-    const valid = /^[7][0-9]{8}$/.test(clean);
+    // Uganda mobile numbers are 9 digits starting with 7 (mobile) or 3 (telecom)
+    const valid = /^[73][0-9]{8}$/.test(clean);
     return {
       msisdn: `+256${clean}`,
       local: `0${clean}`,
@@ -78,6 +80,8 @@ export const RelworxService = {
   /**
    * Request Payment (Push USSD prompt to customer's mobile money handset)
    * POST https://payments.relworx.com/api/mobile-money/request-payment
+   *
+   * Rate Limit Note: Max 5 requests per 10 minutes per phone number (msisdn)
    */
   async requestPayment(params: {
     reference: string;
@@ -98,7 +102,7 @@ export const RelworxService = {
       };
     }
 
-    // Reference must be between 8 and 36 characters
+    // Relworx reference must be between 8 and 36 alphanumeric characters
     let cleanRef = params.reference.replace(/[^a-zA-Z0-9_\-]/g, '');
     if (cleanRef.length < 8) {
       cleanRef = `${cleanRef}_${Date.now()}`;
@@ -120,7 +124,7 @@ export const RelworxService = {
       console.warn('[Relworx] RELWORX_API_KEY is not configured in environment. Running in sandbox simulation mode.');
       return {
         success: true,
-        message: `Relworx payment request simulated. Approve prompt on handset: ${msisdn} for UGX ${params.amount.toLocaleString()}. Configure RELWORX_API_KEY in .env for production.`,
+        message: `Relworx payment request simulated. Approve prompt on handset: ${msisdn} for UGX ${params.amount.toLocaleString()}. Set RELWORX_API_KEY in environment for live transactions.`,
         internal_reference: `sim_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       };
     }
@@ -196,7 +200,9 @@ export const RelworxService = {
       if (params.reference) {
         queryParams.append('reference', params.reference);
       }
-      queryParams.append('account_no', accountNo);
+      if (accountNo) {
+        queryParams.append('account_no', accountNo);
+      }
 
       const url = `https://payments.relworx.com/api/mobile-money/check-request-status?${queryParams.toString()}`;
 
@@ -259,6 +265,7 @@ export const RelworxService = {
 
   /**
    * Verify HMAC-SHA256 signature from Relworx webhook
+   * Protects against replay attacks and verifies authenticity
    */
   verifyWebhookSignature(signatureHeader: string | undefined, payloadBody: any): boolean {
     const secret = this.getWebhookSecret();
@@ -274,12 +281,44 @@ export const RelworxService = {
 
     try {
       const bodyString = typeof payloadBody === 'string' ? payloadBody : JSON.stringify(payloadBody);
+
+      // Extract hash and timestamp if header is formatted as t=...,v1=... or v1=...
+      let signatureHash = signatureHeader.trim();
+      let timestamp: number | null = null;
+
+      if (signatureHeader.includes('=')) {
+        const parts = signatureHeader.split(',');
+        for (const part of parts) {
+          const [k, v] = part.split('=').map((s) => s.trim());
+          if (k === 't' && v) {
+            timestamp = parseInt(v, 10);
+          } else if ((k === 'v1' || k === 'signature') && v) {
+            signatureHash = v;
+          }
+        }
+      }
+
+      // Prevent replay attacks if timestamp is present (> 15 minutes old)
+      if (timestamp && !isNaN(timestamp)) {
+        const ageSec = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
+        if (ageSec > 900) {
+          console.warn(`[Relworx Webhook] Expired timestamp signature (${ageSec}s old).`);
+          return false;
+        }
+      }
+
+      // Compute HMAC-SHA256
       const computedHash = crypto.createHmac('sha256', secret).update(bodyString).digest('hex');
 
-      return crypto.timingSafeEqual(
-        Buffer.from(signatureHeader.trim().toLowerCase()),
-        Buffer.from(computedHash.toLowerCase())
-      );
+      // Compare using timing-safe comparison
+      const sigBuf = Buffer.from(signatureHash.toLowerCase(), 'utf-8');
+      const compBuf = Buffer.from(computedHash.toLowerCase(), 'utf-8');
+
+      if (sigBuf.length !== compBuf.length) {
+        return false;
+      }
+
+      return crypto.timingSafeEqual(sigBuf, compBuf);
     } catch (err) {
       console.error('[Relworx Signature Verification Error]', err);
       return false;

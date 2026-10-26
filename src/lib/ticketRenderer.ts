@@ -3,8 +3,8 @@ import { jsPDF } from 'jspdf';
 import { TicketRecord } from '../types/inventory';
 
 const TICKET_TEMPLATES = {
-  ordinary: '/public/assets/aistudio/1_d9ab832d.jpg',
-  vip: '/public/assets/aistudio/2_c9323f09.jpg',
+  ordinary: '/assets/aistudio/1_d9ab832d.jpg',
+  vip: '/assets/aistudio/2_c9323f09.jpg',
 };
 
 export const TicketRenderer = {
@@ -13,7 +13,8 @@ export const TicketRenderer = {
    */
   async renderTicketToCanvas(ticket: TicketRecord): Promise<HTMLCanvasElement> {
     const isVip = ticket.category === 'VIP';
-    const templateUrl = isVip ? TICKET_TEMPLATES.vip : TICKET_TEMPLATES.ordinary;
+    const primaryUrl = isVip ? TICKET_TEMPLATES.vip : TICKET_TEMPLATES.ordinary;
+    const fallbackUrl = isVip ? '/public/assets/aistudio/2_c9323f09.jpg' : '/public/assets/aistudio/1_d9ab832d.jpg';
 
     // 1. Generate QR Code using the secure unguessable qr_token UUID
     const verificationUrl = `${window.location.origin}?verify=${ticket.qr_token}`;
@@ -27,13 +28,20 @@ export const TicketRenderer = {
       },
     });
 
-    // 2. Load background template image
+    // 2. Load background template image (handles both root and public paths)
     const bgImage = await new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Failed to load ticket template image'));
-      img.src = templateUrl;
+      img.onerror = () => {
+        // Try fallback URL if primary fails
+        const fallback = new Image();
+        fallback.crossOrigin = 'anonymous';
+        fallback.onload = () => resolve(fallback);
+        fallback.onerror = () => reject(new Error('Failed to load ticket template image'));
+        fallback.src = fallbackUrl;
+      };
+      img.src = primaryUrl;
     });
 
     // 3. Load QR code image
