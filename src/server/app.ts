@@ -455,8 +455,9 @@ export function createExpressApp() {
   /**
    * Admin: Verify MTN Mobile Money Merchant Payment
    * Checks against official MTN merchant portal records and activates QR tickets
+   * Supports both /api/admin/mtn-verify and legacy alias /api/admin/verify-mtn-payment
    */
-  app.post('/api/admin/verify-mtn-payment', requireAdminAuth, async (req, res) => {
+  const handleMtnVerify = async (req: express.Request, res: express.Response) => {
     try {
       const { orderRef, adminName, notes } = req.body || {};
       if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef is required.' });
@@ -474,13 +475,17 @@ export function createExpressApp() {
     } catch {
       res.status(500).json({ success: false, message: 'Error verifying MTN payment.' });
     }
-  });
+  };
+
+  app.post('/api/admin/mtn-verify', requireAdminAuth, handleMtnVerify);
+  app.post('/api/admin/verify-mtn-payment', requireAdminAuth, handleMtnVerify);
 
   /**
    * Admin: Reject MTN Mobile Money Merchant Payment
    * Marks order rejected and releases reserved tickets back to inventory
+   * Supports both /api/admin/mtn-reject and legacy alias /api/admin/reject-mtn-payment
    */
-  app.post('/api/admin/reject-mtn-payment', requireAdminAuth, async (req, res) => {
+  const handleMtnReject = async (req: express.Request, res: express.Response) => {
     try {
       const { orderRef, reason, adminName } = req.body || {};
       if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef is required.' });
@@ -495,7 +500,10 @@ export function createExpressApp() {
     } catch {
       res.status(500).json({ success: false, message: 'Error rejecting payment.' });
     }
-  });
+  };
+
+  app.post('/api/admin/mtn-reject', requireAdminAuth, handleMtnReject);
+  app.post('/api/admin/reject-mtn-payment', requireAdminAuth, handleMtnReject);
 
   app.post('/api/admin/verify-relworx-transaction', requireAdminAuth, async (req, res) => {
     try {

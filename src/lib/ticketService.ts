@@ -419,10 +419,11 @@ export const TicketService = {
   /**
    * Admin Verify MTN Payment (Protected)
    * Marks order paid and generates active QR tokens
+   * Calls secure backend endpoint /api/admin/mtn-verify (with fallback to /api/admin/verify-mtn-payment)
    */
   async verifyMtnPaymentAdmin(orderRef: string, adminName: string = 'Admin', notes?: string): Promise<{ success: boolean; message: string }> {
-    const res = await fetchSafeJson<any>(
-      '/api/admin/verify-mtn-payment',
+    let res = await fetchSafeJson<any>(
+      '/api/admin/mtn-verify',
       {
         method: 'POST',
         headers: this.getAdminHeaders(),
@@ -430,6 +431,19 @@ export const TicketService = {
       },
       PAYMENT_API_TIMEOUT_MS
     );
+
+    if (!res.ok && res.status === 404) {
+      // Fallback for legacy endpoints
+      res = await fetchSafeJson<any>(
+        '/api/admin/verify-mtn-payment',
+        {
+          method: 'POST',
+          headers: this.getAdminHeaders(),
+          body: JSON.stringify({ orderRef, adminName, notes }),
+        },
+        PAYMENT_API_TIMEOUT_MS
+      );
+    }
 
     if (res.data && typeof res.data.success === 'boolean') {
       return res.data;
@@ -440,10 +454,11 @@ export const TicketService = {
   /**
    * Admin Reject MTN Payment (Protected)
    * Marks order rejected and releases reserved tickets
+   * Calls secure backend endpoint /api/admin/mtn-reject (with fallback to /api/admin/reject-mtn-payment)
    */
   async rejectMtnPaymentAdmin(orderRef: string, reason: string, adminName: string = 'Admin'): Promise<{ success: boolean; message: string }> {
-    const res = await fetchSafeJson<any>(
-      '/api/admin/reject-mtn-payment',
+    let res = await fetchSafeJson<any>(
+      '/api/admin/mtn-reject',
       {
         method: 'POST',
         headers: this.getAdminHeaders(),
@@ -451,6 +466,19 @@ export const TicketService = {
       },
       PAYMENT_API_TIMEOUT_MS
     );
+
+    if (!res.ok && res.status === 404) {
+      // Fallback for legacy endpoints
+      res = await fetchSafeJson<any>(
+        '/api/admin/reject-mtn-payment',
+        {
+          method: 'POST',
+          headers: this.getAdminHeaders(),
+          body: JSON.stringify({ orderRef, reason, adminName }),
+        },
+        PAYMENT_API_TIMEOUT_MS
+      );
+    }
 
     if (res.data && typeof res.data.success === 'boolean') {
       return res.data;

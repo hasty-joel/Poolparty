@@ -57,9 +57,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [healthData, setHealthData] = useState<any>(null);
 
   // MTN MoMo Merchant Verification State
-  const [mtnStatusFilter, setMtnStatusFilter] = useState<'all' | 'pending_verification' | 'verified' | 'rejected' | 'unsubmitted'>('all');
+  const [mtnStatusFilter, setMtnStatusFilter] = useState<'all' | 'pending_verification' | 'verified' | 'rejected' | 'unsubmitted'>('pending_verification');
   const [mtnSearchTerm, setMtnSearchTerm] = useState('');
   const [verifyingMtnOrderRef, setVerifyingMtnOrderRef] = useState<string | null>(null);
+  
+  // Verification Confirmation Modal
+  const [verifyModalOrder, setVerifyModalOrder] = useState<any | null>(null);
+  const [verifyNotes, setVerifyNotes] = useState<string>('Verified against official MTN MoMo Merchant records');
+  const [isConfirmedCheckbox, setIsConfirmedCheckbox] = useState(false);
+
+  // Rejection Modal
   const [rejectModalOrder, setRejectModalOrder] = useState<any | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('Transaction ID could not be confirmed on MTN MoMo merchant statement');
   const [isRejecting, setIsRejecting] = useState(false);
@@ -129,14 +136,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleVerifyMtnOrder = async (orderRef: string) => {
+  const handleOpenVerifyModal = (ord: any) => {
+    setVerifyModalOrder(ord);
+    setVerifyNotes('Verified against official MTN MoMo Merchant portal');
+    setIsConfirmedCheckbox(false);
+    setActionError(null);
+    setActionSuccess(null);
+  };
+
+  const handleOpenRejectModal = (ord: any) => {
+    setRejectModalOrder(ord);
+    setRejectReason('Transaction ID could not be confirmed on MTN MoMo merchant statement');
+    setActionError(null);
+    setActionSuccess(null);
+  };
+
+  const handleConfirmVerifyMtn = async () => {
+    if (!verifyModalOrder) return;
+    const orderRef = verifyModalOrder.order_ref;
     setVerifyingMtnOrderRef(orderRef);
     setActionError(null);
     setActionSuccess(null);
     try {
-      const res = await TicketService.verifyMtnPaymentAdmin(orderRef, 'Admin', 'Verified against MTN MoMo Merchant records');
+      const res = await TicketService.verifyMtnPaymentAdmin(
+        orderRef,
+        'Admin',
+        verifyNotes.trim() || 'Verified against official MTN MoMo Merchant portal'
+      );
       if (res.success) {
-        setActionSuccess(`Verified & Issued! Order ${orderRef} marked as PAID. QR ticket passes have been activated.`);
+        setActionSuccess(`Verified & Issued! Order ${orderRef} marked as PAID. Official QR passes activated.`);
+        setVerifyModalOrder(null);
         await loadData();
       } else {
         setActionError(res.message || 'MTN payment verification failed.');
@@ -150,13 +179,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleConfirmRejectMtn = async () => {
     if (!rejectModalOrder) return;
+    if (!rejectReason.trim()) {
+      setActionError('Please specify a rejection reason before proceeding.');
+      return;
+    }
     setIsRejecting(true);
     setActionError(null);
     setActionSuccess(null);
     try {
-      const res = await TicketService.rejectMtnPaymentAdmin(rejectModalOrder.order_ref, rejectReason);
+      const res = await TicketService.rejectMtnPaymentAdmin(rejectModalOrder.order_ref, rejectReason.trim());
       if (res.success) {
-        setActionSuccess(`Order ${rejectModalOrder.order_ref} rejected. Reserved tickets were released back to available inventory.`);
+        setActionSuccess(`Order ${rejectModalOrder.order_ref} rejected. Reserved ticket(s) released back to available inventory.`);
         setRejectModalOrder(null);
         await loadData();
       } else {
@@ -307,14 +340,16 @@ create table if not exists public.tickets (
   )
 );
 
--- Non-destructively add reservation & Relworx columns if upgrading an existing table
+-- Non-destructively add reservation, Relworx & MTN MoMo columns
 alter table public.tickets
   add column if not exists order_ref text,
   add column if not exists reserved_until timestamptz,
-  add column if not exists relworx_internal_ref text;
+  add column if not exists relworx_internal_ref text,
+  add column if not exists mtn_transaction_id text;
 
 create index if not exists idx_tickets_order_ref on public.tickets(order_ref);
 create index if not exists idx_tickets_reserved_until on public.tickets(reserved_until);
+create index if not exists idx_tickets_mtn_tx on public.tickets(mtn_transaction_id);
 
 -- Create public.orders table if missing
 create table if not exists public.orders (
@@ -337,6 +372,19 @@ create table if not exists public.orders (
   created_at timestamptz not null default now(),
   paid_at timestamptz
 );
+
+-- Non-destructively add MTN MoMo verification columns to public.orders
+alter table public.orders
+  add column if not exists mtn_transaction_id text,
+  add column if not exists payer_phone text,
+  add column if not exists verification_status text default 'unsubmitted',
+  add column if not exists verified_at timestamptz,
+  add column if not exists verified_by text,
+  add column if not exists rejection_reason text,
+  add column if not exists submission_notes text;
+
+create index if not exists idx_orders_mtn_tx on public.orders(mtn_transaction_id);
+create index if not exists idx_orders_verif_status on public.orders(verification_status);
 
 alter table public.tickets enable row level security;
 alter table public.orders enable row level security;
@@ -818,19 +866,27 @@ notify pgrst, 'reload schema';`;
             {(() => {
               const mtnOrders = orders.filter((o) => {
                 // Must be MTN MoMo or have verification info
-                const isMtn = o.payment_method === 'mtn_momo' || o.network === 'MTN' || o.mtn_transaction_id || o.verification_status;
+                const isMtn =
+                  o.payment_method === 'mtn_momo_merchant' ||
+                  o.payment_method === 'mtn_momo' ||
+                  o.network === 'MTN' ||
+                  o.mtn_transaction_id ||
+                  o.verification_status;
                 if (!isMtn) return false;
 
-                const statusMatch =
-                  mtnStatusFilter === 'all'
-                    ? true
-                    : mtnStatusFilter === 'pending_verification'
-                    ? o.verification_status === 'pending_verification'
-                    : mtnStatusFilter === 'verified'
-                    ? o.verification_status === 'verified'
-                    : mtnStatusFilter === 'rejected'
-                    ? o.verification_status === 'rejected'
-                    : o.verification_status === 'unsubmitted' || !o.verification_status;
+                const isVerified = o.status === 'paid' || o.verification_status === 'verified';
+                const isRejected = o.status === 'failed' || o.status === 'cancelled' || o.verification_status === 'rejected';
+                const isPending = !isVerified && !isRejected;
+
+                if (mtnStatusFilter === 'pending_verification') {
+                  if (!isPending) return false;
+                } else if (mtnStatusFilter === 'verified') {
+                  if (!isVerified) return false;
+                } else if (mtnStatusFilter === 'rejected') {
+                  if (!isRejected) return false;
+                } else if (mtnStatusFilter === 'unsubmitted') {
+                  if (!isPending || o.mtn_transaction_id) return false;
+                }
 
                 const term = mtnSearchTerm.trim().toLowerCase();
                 const searchMatch =
@@ -841,13 +897,25 @@ notify pgrst, 'reload schema';`;
                   (o.buyer_name && o.buyer_name.toLowerCase().includes(term)) ||
                   (o.buyer_phone && o.buyer_phone.toLowerCase().includes(term));
 
-                return statusMatch && searchMatch;
+                return searchMatch;
               });
 
               if (mtnOrders.length === 0) {
                 return (
-                  <div className="p-8 text-center text-xs text-slate-400 border border-dashed border-white/10 rounded-xl">
-                    No MTN Mobile Money orders match the current filter.
+                  <div className="p-8 text-center text-xs text-slate-400 border border-dashed border-white/10 rounded-xl space-y-2">
+                    <p className="font-semibold text-slate-300">No MTN Mobile Money payments found for this filter.</p>
+                    <p className="text-[11px] text-slate-500">
+                      When attendees choose MTN MoMoPay and submit their Transaction IDs, they will appear here awaiting verification.
+                    </p>
+                    {mtnStatusFilter !== 'all' && (
+                      <button
+                        type="button"
+                        onClick={() => setMtnStatusFilter('all')}
+                        className="mt-2 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-cyan-300 text-xs font-bold rounded-lg cursor-pointer"
+                      >
+                        View All MTN Payments ({orders.filter((o) => o.network === 'MTN' || o.payment_method === 'mtn_momo' || o.mtn_transaction_id).length})
+                      </button>
+                    )}
                   </div>
                 );
               }
@@ -858,22 +926,23 @@ notify pgrst, 'reload schema';`;
                   <div className="block lg:hidden space-y-3">
                     {mtnOrders.map((ord) => {
                       const isVip = ord.category === 'VIP';
-                      const isPendingReview = ord.verification_status === 'pending_verification';
-                      const isVerified = ord.verification_status === 'verified';
-                      const isRejected = ord.verification_status === 'rejected';
+                      const isVerified = ord.status === 'paid' || ord.verification_status === 'verified';
+                      const isRejected = ord.status === 'failed' || ord.status === 'cancelled' || ord.verification_status === 'rejected';
+                      const isPendingReview = !isVerified && !isRejected;
+                      const hasTxId = Boolean(ord.mtn_transaction_id && ord.mtn_transaction_id.trim());
 
                       return (
                         <div
                           key={`mobile-${ord.id || ord.order_ref}`}
-                          className="bg-[#030712] border border-white/10 rounded-xl p-3.5 space-y-3"
+                          className="bg-[#030712] border border-white/15 rounded-xl p-4 space-y-3 shadow-lg"
                         >
                           {/* Top Row: Ref & Tier */}
-                          <div className="flex items-start justify-between gap-2 border-b border-white/5 pb-2">
+                          <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2">
                             <div className="min-w-0">
                               <span className="font-mono text-xs font-bold text-cyan-300 break-all block">
                                 {ord.order_ref}
                               </span>
-                              <span className="text-[10px] text-slate-500 block">
+                              <span className="text-[10px] text-slate-400 block">
                                 {new Date(ord.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                               </span>
                             </div>
@@ -887,20 +956,27 @@ notify pgrst, 'reload schema';`;
                           {/* Attendee Info */}
                           <div className="text-xs space-y-0.5">
                             <span className="font-bold text-white block">{ord.buyer_name}</span>
-                            <span className="text-slate-400 font-mono text-[11px] block">{ord.buyer_phone}</span>
-                            <span className="text-slate-500 text-[10px] block truncate">{ord.buyer_email}</span>
+                            <span className="text-slate-300 font-mono text-[11px] block">{ord.buyer_phone}</span>
+                            {ord.buyer_email && (
+                              <span className="text-slate-400 text-[10px] block truncate">{ord.buyer_email}</span>
+                            )}
                           </div>
 
                           {/* MTN Tx ID Box */}
-                          <div className="bg-[#080c14] p-2.5 rounded-lg border border-white/10 flex items-center justify-between gap-2">
+                          <div className="bg-[#080c14] p-2.5 rounded-lg border border-amber-500/30 flex items-center justify-between gap-2">
                             <div className="min-w-0">
-                              <span className="text-[9.5px] uppercase text-slate-400 font-bold block">MTN Tx ID</span>
+                              <span className="text-[9.5px] uppercase text-amber-400 font-bold block">MTN MoMo Transaction ID</span>
                               {ord.mtn_transaction_id ? (
-                                <span className="font-mono font-bold text-amber-300 text-xs break-all block">
+                                <span className="font-mono font-black text-amber-300 text-xs break-all block select-all">
                                   {ord.mtn_transaction_id}
                                 </span>
                               ) : (
-                                <span className="text-[11px] text-slate-500 italic block">Awaiting submission</span>
+                                <span className="text-[11px] text-slate-400 italic block">Awaiting customer submission</span>
+                              )}
+                              {ord.payer_phone && ord.payer_phone !== ord.buyer_phone && (
+                                <span className="text-[9.5px] text-slate-400 font-mono block mt-0.5">
+                                  Payer Phone: <strong className="text-white">{ord.payer_phone}</strong>
+                                </span>
                               )}
                             </div>
                             {ord.mtn_transaction_id && (
@@ -911,7 +987,7 @@ notify pgrst, 'reload schema';`;
                                   setCopiedTxId(ord.mtn_transaction_id);
                                   setTimeout(() => setCopiedTxId(null), 2000);
                                 }}
-                                className="px-2.5 py-1.5 bg-amber-400/20 text-amber-300 hover:bg-amber-400/30 text-xs font-bold rounded-md flex items-center gap-1 cursor-pointer shrink-0 min-h-[32px]"
+                                className="px-2.5 py-1.5 bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-xs font-bold rounded-md flex items-center gap-1 cursor-pointer shrink-0 min-h-[34px]"
                               >
                                 {copiedTxId === ord.mtn_transaction_id ? (
                                   <>
@@ -932,29 +1008,30 @@ notify pgrst, 'reload schema';`;
                           <div className="flex items-center justify-between text-xs pt-1">
                             <div>
                               <span className="text-[10px] uppercase text-slate-400 block font-semibold">Total Amount</span>
-                              <span className="font-mono font-bold text-white text-sm">
+                              <span className="font-mono font-black text-white text-sm">
                                 UGX {Number(ord.total_amount_ugx).toLocaleString()}
                               </span>
                             </div>
                             <div>
-                              {isPendingReview ? (
-                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 animate-pulse">
-                                  <Clock className="w-3 h-3" />
-                                  <span>Pending Review</span>
-                                </span>
-                              ) : isVerified ? (
+                              {isVerified ? (
                                 <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700">
-                                  <CheckCircle2 className="w-3 h-3" />
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                   <span>Verified & Issued</span>
                                 </span>
                               ) : isRejected ? (
                                 <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-700">
-                                  <XCircle className="w-3 h-3" />
+                                  <XCircle className="w-3 h-3 text-rose-400" />
                                   <span>Rejected</span>
                                 </span>
+                              ) : hasTxId ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 animate-pulse">
+                                  <Clock className="w-3 h-3 text-amber-400" />
+                                  <span>Pending Review</span>
+                                </span>
                               ) : (
-                                <span className="inline-block font-medium text-[10px] uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-                                  Unsubmitted
+                                <span className="inline-flex items-center gap-1 font-medium text-[10px] uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-white/10">
+                                  <Clock className="w-3 h-3 text-slate-400" />
+                                  <span>Awaiting Customer Tx ID</span>
                                 </span>
                               )}
                             </div>
@@ -962,35 +1039,34 @@ notify pgrst, 'reload schema';`;
 
                           {/* Action Buttons for Mobile */}
                           {isPendingReview && (
-                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-white/10">
                               <button
                                 type="button"
-                                onClick={() => handleVerifyMtnOrder(ord.order_ref)}
+                                onClick={() => handleOpenVerifyModal(ord)}
                                 disabled={verifyingMtnOrderRef === ord.order_ref}
-                                className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs uppercase rounded-lg flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
+                                className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black text-xs uppercase tracking-wide rounded-lg flex items-center justify-center gap-1.5 cursor-pointer shadow-md min-h-[44px] transition-all"
                               >
                                 {verifyingMtnOrderRef === ord.order_ref ? (
-                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
                                 ) : (
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  <CheckCircle2 className="w-4 h-4 text-slate-950" />
                                 )}
-                                <span>Verify & Issue</span>
+                                <span>Verify & Issue Ticket</span>
                               </button>
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setRejectModalOrder(ord);
-                                  setRejectReason('Transaction ID could not be confirmed on MTN MoMo merchant statement');
-                                }}
-                                className="py-2.5 px-3 bg-rose-950/60 hover:bg-rose-900 border border-rose-700/50 text-rose-300 text-xs font-bold uppercase rounded-lg cursor-pointer min-h-[42px]"
+                                onClick={() => handleOpenRejectModal(ord)}
+                                disabled={isRejecting}
+                                className="w-full py-2.5 px-3 bg-rose-950/80 hover:bg-rose-900 border border-rose-600/80 text-rose-200 font-bold text-xs uppercase tracking-wide rounded-lg flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] transition-all"
                               >
-                                Reject
+                                <XCircle className="w-4 h-4 text-rose-400" />
+                                <span>Reject Payment</span>
                               </button>
                             </div>
                           )}
 
                           {isVerified && (
-                            <div className="flex items-center gap-2 pt-2 border-t border-white/5">
+                            <div className="flex items-center gap-2 pt-2 border-t border-white/10">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1030,45 +1106,48 @@ notify pgrst, 'reload schema';`;
 
                   {/* Desktop Table */}
                   <div className="hidden lg:block overflow-x-auto">
-                    <table className="w-full text-left text-xs">
+                    <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="border-b border-white/10 text-slate-400 uppercase text-[10px] tracking-wider">
-                        <th className="py-3 px-3">Order Ref / Time</th>
+                        <th className="py-3 px-3">Order Ref / Date</th>
                         <th className="py-3 px-3">Attendee</th>
                         <th className="py-3 px-3">MTN Tx ID & Payer</th>
                         <th className="py-3 px-3">Pass Tier</th>
                         <th className="py-3 px-3">Amount (UGX)</th>
-                        <th className="py-3 px-3">Verification</th>
-                        <th className="py-3 px-3 text-right">Admin Actions</th>
+                        <th className="py-3 px-3">Status</th>
+                        <th className="py-3 px-3 text-right min-w-[240px]">Admin Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
                       {mtnOrders.map((ord) => {
                         const isVip = ord.category === 'VIP';
-                        const isPendingReview = ord.verification_status === 'pending_verification';
-                        const isVerified = ord.verification_status === 'verified';
-                        const isRejected = ord.verification_status === 'rejected';
+                        const isVerified = ord.status === 'paid' || ord.verification_status === 'verified';
+                        const isRejected = ord.status === 'failed' || ord.status === 'cancelled' || ord.verification_status === 'rejected';
+                        const isPendingReview = !isVerified && !isRejected;
+                        const hasTxId = Boolean(ord.mtn_transaction_id && ord.mtn_transaction_id.trim());
 
                         return (
                           <tr key={ord.id || ord.order_ref} className="hover:bg-white/[0.02] transition-colors">
                             <td className="py-3 px-3 font-mono">
                               <span className="font-bold text-cyan-300 block">{ord.order_ref}</span>
-                              <span className="text-[10px] text-slate-500">
+                              <span className="text-[10px] text-slate-400">
                                 {new Date(ord.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                               </span>
                             </td>
 
                             <td className="py-3 px-3">
                               <span className="font-bold text-white block">{ord.buyer_name}</span>
-                              <span className="text-[11px] text-slate-400 font-mono block">{ord.buyer_phone}</span>
-                              <span className="text-[10px] text-slate-500">{ord.buyer_email}</span>
+                              <span className="text-[11px] text-slate-300 font-mono block">{ord.buyer_phone}</span>
+                              {ord.buyer_email && (
+                                <span className="text-[10px] text-slate-400 block truncate max-w-[160px]">{ord.buyer_email}</span>
+                              )}
                             </td>
 
                             <td className="py-3 px-3">
                               {ord.mtn_transaction_id ? (
                                 <div className="space-y-1">
                                   <div className="flex items-center gap-1.5">
-                                    <span className="font-mono font-black text-amber-300 bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded text-[11px]">
+                                    <span className="font-mono font-black text-amber-300 bg-amber-950/80 border border-amber-500/50 px-2 py-0.5 rounded text-[11px] select-all">
                                       {ord.mtn_transaction_id}
                                     </span>
                                     <button
@@ -1107,20 +1186,15 @@ notify pgrst, 'reload schema';`;
                               </span>
                             </td>
 
-                            <td className="py-3 px-3 font-mono font-bold text-white">
+                            <td className="py-3 px-3 font-mono font-black text-white">
                               UGX {Number(ord.total_amount_ugx).toLocaleString()}
                             </td>
 
                             <td className="py-3 px-3">
-                              {isPendingReview ? (
-                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2.5 py-1 rounded bg-amber-950 text-amber-300 border border-amber-500 animate-pulse">
-                                  <Clock className="w-3 h-3" />
-                                  <span>Pending Review</span>
-                                </span>
-                              ) : isVerified ? (
+                              {isVerified ? (
                                 <div className="space-y-0.5">
-                                  <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700">
-                                    <CheckCircle2 className="w-3 h-3" />
+                                  <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2.5 py-1 rounded bg-emerald-950 text-emerald-300 border border-emerald-700">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                                     <span>Verified & Issued</span>
                                   </span>
                                   {ord.verified_at && (
@@ -1132,7 +1206,7 @@ notify pgrst, 'reload schema';`;
                               ) : isRejected ? (
                                 <div className="space-y-0.5">
                                   <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-700">
-                                    <XCircle className="w-3 h-3" />
+                                    <XCircle className="w-3 h-3 text-rose-400" />
                                     <span>Rejected</span>
                                   </span>
                                   {ord.rejection_reason && (
@@ -1141,42 +1215,47 @@ notify pgrst, 'reload schema';`;
                                     </span>
                                   )}
                                 </div>
+                              ) : hasTxId ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2.5 py-1 rounded bg-amber-950 text-amber-300 border border-amber-500 animate-pulse">
+                                  <Clock className="w-3 h-3 text-amber-400" />
+                                  <span>Pending Verification</span>
+                                </span>
                               ) : (
-                                <span className="inline-block font-medium text-[10px] uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-                                  Unsubmitted
+                                <span className="inline-flex items-center gap-1 font-medium text-[10px] uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-white/10">
+                                  <Clock className="w-3 h-3 text-slate-400" />
+                                  <span>Awaiting Customer Tx ID</span>
                                 </span>
                               )}
                             </td>
 
                             <td className="py-3 px-3 text-right">
-                              <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                              <div className="flex items-center justify-end gap-2 flex-nowrap">
                                 {isPendingReview && (
                                   <>
                                     <button
                                       type="button"
-                                      onClick={() => handleVerifyMtnOrder(ord.order_ref)}
+                                      onClick={() => handleOpenVerifyModal(ord)}
                                       disabled={verifyingMtnOrderRef === ord.order_ref}
-                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-[10px] uppercase rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
-                                      title="Mark paid and activate QR ticket passes"
+                                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-slate-950 font-black text-[11px] uppercase tracking-wide rounded-md flex items-center gap-1.5 cursor-pointer transition-all shadow-sm shrink-0 whitespace-nowrap min-h-[34px]"
+                                      title="Verify payment in official MTN merchant account and activate passes"
                                     >
                                       {verifyingMtnOrderRef === ord.order_ref ? (
-                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-950" />
                                       ) : (
-                                        <CheckCircle2 className="w-3 h-3" />
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />
                                       )}
-                                      <span>Verify & Issue</span>
+                                      <span>Verify & Issue Ticket</span>
                                     </button>
 
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        setRejectModalOrder(ord);
-                                        setRejectReason('Transaction ID could not be confirmed on MTN MoMo merchant statement');
-                                      }}
-                                      className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900 border border-rose-700/50 text-rose-300 text-[10px] font-bold uppercase rounded cursor-pointer"
+                                      onClick={() => handleOpenRejectModal(ord)}
+                                      disabled={isRejecting}
+                                      className="px-2.5 py-1.5 bg-rose-950/70 hover:bg-rose-900 active:scale-98 border border-rose-600/70 text-rose-200 text-[11px] font-bold uppercase tracking-wide rounded-md flex items-center gap-1 cursor-pointer transition-all shrink-0 whitespace-nowrap min-h-[34px]"
                                       title="Reject payment and release tickets back to available stock"
                                     >
-                                      Reject
+                                      <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                                      <span>Reject Payment</span>
                                     </button>
                                   </>
                                 )}
@@ -1194,7 +1273,7 @@ notify pgrst, 'reload schema';`;
                                           setActionSuccess('Switched to Inventory tab to view passes.');
                                         }
                                       }}
-                                      className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 text-[10px] font-bold rounded cursor-pointer"
+                                      className="px-2.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-[11px] font-bold rounded cursor-pointer whitespace-nowrap"
                                     >
                                       View Pass
                                     </button>
@@ -1209,7 +1288,7 @@ notify pgrst, 'reload schema';`;
                                           setActionError('No ticket record found for reprint.');
                                         }
                                       }}
-                                      className="px-2 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 text-[10px] font-bold rounded flex items-center gap-1 cursor-pointer"
+                                      className="px-2 py-1.5 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 text-[11px] font-bold rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
                                       title="Reprint personalized PDF ticket"
                                     >
                                       <Printer className="w-3 h-3" />
@@ -1228,6 +1307,152 @@ notify pgrst, 'reload schema';`;
               </div>
             );
           })()}
+          </div>
+        )}
+
+        {/* Verification Confirmation Modal */}
+        {verifyModalOrder && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm overflow-y-auto">
+            <div className="bg-[#0b1220] border-2 border-emerald-500/70 rounded-xl sm:rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl my-auto max-h-[94vh] overflow-y-auto">
+              <div className="flex items-center gap-2.5 text-emerald-400 border-b border-white/10 pb-3">
+                <ShieldCheck className="w-6 h-6 shrink-0" />
+                <div>
+                  <h4 className="text-base sm:text-lg font-black text-white font-display">
+                    Verify MTN Mobile Money Payment
+                  </h4>
+                  <span className="text-[11px] text-slate-400">
+                    Confirm funds were received before activating tickets
+                  </span>
+                </div>
+              </div>
+
+              {/* Warning Notice to verify in official merchant account first */}
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/40 text-xs text-amber-200 flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="font-bold text-amber-300 block mb-0.5">
+                    Check Your Official MTN MoMo Merchant Account First
+                  </strong>
+                  <p className="text-amber-200/90 leading-relaxed">
+                    Please log into your official MTN MoMoPay / Merchant portal or check your merchant phone SMS records to verify that <strong>UGX {Number(verifyModalOrder.total_amount_ugx).toLocaleString()}</strong> was actually received for this transaction.
+                  </p>
+                </div>
+              </div>
+
+              {/* Transaction Summary Card */}
+              <div className="bg-[#030712] rounded-xl border border-white/10 p-4 space-y-2.5 text-xs">
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <span className="text-slate-400">Order Reference:</span>
+                  <span className="font-mono font-bold text-cyan-300">{verifyModalOrder.order_ref}</span>
+                </div>
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <span className="text-slate-400">Attendee Name:</span>
+                  <span className="font-bold text-white">{verifyModalOrder.buyer_name}</span>
+                </div>
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <span className="text-slate-400">Attendee Phone:</span>
+                  <span className="font-mono text-slate-300">{verifyModalOrder.buyer_phone}</span>
+                </div>
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <span className="text-slate-400">Ticket Tier & Qty:</span>
+                  <span className="font-extrabold text-amber-300">{verifyModalOrder.quantity}× {verifyModalOrder.category} Pass</span>
+                </div>
+                <div className="flex justify-between items-center border-b border-white/5 pb-2">
+                  <span className="text-slate-400">Expected Total:</span>
+                  <span className="font-mono font-black text-emerald-400 text-sm">
+                    UGX {Number(verifyModalOrder.total_amount_ugx).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center pt-1">
+                  <span className="text-slate-400">MTN Transaction ID:</span>
+                  <div className="flex items-center gap-1.5">
+                    {verifyModalOrder.mtn_transaction_id ? (
+                      <>
+                        <span className="font-mono font-black text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-500/50 select-all">
+                          {verifyModalOrder.mtn_transaction_id}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(verifyModalOrder.mtn_transaction_id);
+                            setCopiedTxId(verifyModalOrder.mtn_transaction_id);
+                            setTimeout(() => setCopiedTxId(null), 2000);
+                          }}
+                          className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                          title="Copy Transaction ID"
+                        >
+                          {copiedTxId === verifyModalOrder.mtn_transaction_id ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-slate-500 italic">Not submitted by buyer</span>
+                    )}
+                  </div>
+                </div>
+                {verifyModalOrder.payer_phone && (
+                  <div className="flex justify-between items-center text-[11px] text-slate-400 pt-1">
+                    <span>Payer Phone:</span>
+                    <span className="font-mono text-white">{verifyModalOrder.payer_phone}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Admin Verification Notes */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Admin Audit / Verification Note <span className="text-slate-500 font-normal">(Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={verifyNotes}
+                  onChange={(e) => setVerifyNotes(e.target.value)}
+                  placeholder="e.g. Verified on MTN merchant statement"
+                  className="w-full px-3 py-2 bg-[#030712] border border-white/15 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400 font-mono"
+                />
+              </div>
+
+              {/* Mandatory Checkbox */}
+              <label className="flex items-start gap-2.5 p-3 rounded-xl bg-emerald-950/30 border border-emerald-500/40 cursor-pointer text-xs text-slate-200 select-none">
+                <input
+                  type="checkbox"
+                  checked={isConfirmedCheckbox}
+                  onChange={(e) => setIsConfirmedCheckbox(e.target.checked)}
+                  className="mt-0.5 rounded border-white/20 text-emerald-500 focus:ring-emerald-500"
+                />
+                <span className="leading-relaxed">
+                  I confirm that I have verified receipt of <strong>UGX {Number(verifyModalOrder.total_amount_ugx).toLocaleString()}</strong> in our MTN MoMo Merchant account and authorize activating the official QR ticket passes.
+                </span>
+              </label>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2 border-t border-white/10">
+                <button
+                  type="button"
+                  disabled={verifyingMtnOrderRef === verifyModalOrder.order_ref}
+                  onClick={() => setVerifyModalOrder(null)}
+                  className="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!isConfirmedCheckbox || verifyingMtnOrderRef === verifyModalOrder.order_ref}
+                  onClick={handleConfirmVerifyMtn}
+                  className="w-full sm:w-auto min-h-[42px] px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black uppercase tracking-wider rounded-xl cursor-pointer flex items-center justify-center gap-2 shadow-lg transition-all"
+                >
+                  {verifyingMtnOrderRef === verifyModalOrder.order_ref ? (
+                    <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
+                  ) : (
+                    <CheckCircle2 className="w-4 h-4 text-slate-950" />
+                  )}
+                  <span>Confirm & Issue Ticket</span>
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1265,9 +1490,27 @@ notify pgrst, 'reload schema';`;
                   className="w-full px-3 py-2.5 bg-[#030712] border border-white/15 rounded-xl text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-400"
                   placeholder="e.g. Transaction ID was not found on our MTN MoMo statement, or amount was incorrect."
                 />
+
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {[
+                    'Transaction ID not found on MTN merchant statement',
+                    'Amount paid is less than ticket price',
+                    'Duplicate transaction ID already used',
+                    'Customer requested cancellation',
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setRejectReason(preset)}
+                      className="px-2 py-0.5 rounded text-[10px] bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 cursor-pointer"
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2">
+              <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2 border-t border-white/10">
                 <button
                   type="button"
                   disabled={isRejecting}
@@ -1280,7 +1523,7 @@ notify pgrst, 'reload schema';`;
                   type="button"
                   disabled={isRejecting || !rejectReason.trim()}
                   onClick={handleConfirmRejectMtn}
-                  className="w-full sm:w-auto min-h-[42px] px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
+                  className="w-full sm:w-auto min-h-[42px] px-4 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
                 >
                   {isRejecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
                   <span>Confirm Reject & Release Stock</span>
@@ -1568,8 +1811,31 @@ notify pgrst, 'reload schema';`;
                             {new Date(ord.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                           </td>
                           <td className="py-3 px-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              {isPending && (
+                            <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                              {isPending && (ord.payment_method === 'mtn_momo_merchant' || ord.payment_method === 'mtn_momo' || ord.network === 'MTN' || ord.mtn_transaction_id) && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenVerifyModal(ord)}
+                                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black text-[11px] uppercase rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
+                                    title="Verify MTN Merchant Payment"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>Verify & Issue</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenRejectModal(ord)}
+                                    className="px-2 py-1 bg-rose-950/70 hover:bg-rose-900 border border-rose-600 text-rose-200 text-[11px] font-bold uppercase rounded cursor-pointer"
+                                    title="Reject Payment"
+                                  >
+                                    <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                                    <span>Reject</span>
+                                  </button>
+                                </>
+                              )}
+
+                              {isPending && (ord.gateway === 'relworx' || ord.payment_method === 'relworx_mobile_money') && (
                                 <button
                                   onClick={() => handleVerifyRelworxOrder(ord.order_ref)}
                                   disabled={verifyingOrderRef === ord.order_ref}

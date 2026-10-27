@@ -1006,8 +1006,26 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       });
       assert.strictEqual(resUnauth.status, 401, 'Admin verification must reject unauthorized requests');
 
-      // 2. Authorized verification succeeds
-      const resAuth = await fetch(`${baseUrl}/api/admin/verify-mtn-payment`, {
+      const resUnauthDirect = await fetch(`${baseUrl}/api/admin/mtn-verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderRef: 'PP-MTN-1793000000000-TEST' }),
+      });
+      assert.strictEqual(resUnauthDirect.status, 401, '/api/admin/mtn-verify must reject unauthorized requests');
+
+      // 1b. Missing orderRef returns HTTP 400
+      const resMissingRef = await fetch(`${baseUrl}/api/admin/mtn-verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminPasscode}`,
+        },
+        body: JSON.stringify({}),
+      });
+      assert.strictEqual(resMissingRef.status, 400, 'Missing orderRef must return HTTP 400');
+
+      // 2. Authorized verification succeeds via /api/admin/mtn-verify
+      const resAuth = await fetch(`${baseUrl}/api/admin/mtn-verify`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1024,8 +1042,23 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       assert.strictEqual(dataAuth.success, true);
       assert.strictEqual(mockVerify.mock.callCount(), 1);
 
-      // 3. Authorized rejection succeeds and frees inventory
-      const resReject = await fetch(`${baseUrl}/api/admin/reject-mtn-payment`, {
+      // 2b. Legacy alias /api/admin/verify-mtn-payment also succeeds
+      const resLegacy = await fetch(`${baseUrl}/api/admin/verify-mtn-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminPasscode}`,
+        },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-1793000000000-TEST',
+          adminName: 'LeadOrganizer',
+        }),
+      });
+      assert.strictEqual(resLegacy.status, 200);
+      assert.strictEqual(mockVerify.mock.callCount(), 2);
+
+      // 3. Authorized rejection succeeds and frees inventory via /api/admin/mtn-reject
+      const resReject = await fetch(`${baseUrl}/api/admin/mtn-reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

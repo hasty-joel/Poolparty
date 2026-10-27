@@ -2153,22 +2153,93 @@ export const SupabaseServerService = {
         return { success: false, orders: [], error: 'Unable to fetch orders from database.' };
       }
 
-      // Enrich orders with memory submissions if columns are null
-      const enriched = ((data as OrderRow[]) || []).map((ord) => {
-        const sub = _mtnSubmissionsByOrderRef.get(ord.order_ref);
-        if (sub) {
-          return {
-            ...ord,
-            verification_status: ord.verification_status || sub.verificationStatus,
-            mtn_transaction_id: ord.mtn_transaction_id || sub.mtnTransactionId,
-            payer_phone: ord.payer_phone || sub.payerPhone,
-            verified_at: ord.verified_at || sub.verifiedAt,
-            verified_by: ord.verified_by || sub.verifiedBy,
-            rejection_reason: ord.rejection_reason || sub.rejectionReason,
-          };
+      // Fetch tickets that have order references to cross-reference transaction IDs and buyer details
+      let ticketsByOrderRef = new Map<string, { mtn_transaction_id?: string | null; buyer_phone?: string | null }>();
+      try {
+        const { data: ticketRows } = await client
+          .from('tickets')
+          .select('order_ref, mtn_transaction_id, buyer_phone')
+          .not('order_ref', 'is', null);
+
+        if (ticketRows) {
+          for (const tr of ticketRows) {
+            if (tr.order_ref && !ticketsByOrderRef.has(tr.order_ref)) {
+              ticketsByOrderRef.set(tr.order_ref, {
+                mtn_transaction_id: tr.mtn_transaction_id,
+                buyer_phone: tr.buyer_phone,
+              });
+            }
+          }
         }
-        return ord;
-      });
+      } catch {
+        // Non-fatal if tickets query fails
+      }
+
+      // Enrich orders with memory submissions and tickets if columns are null
+      const orderMap = new Map<string, OrderRow>();
+
+      for (const ord of (data as OrderRow[]) || []) {
+        const sub = _mtnSubmissionsByOrderRef.get(ord.order_ref);
+        const ticketInfo = ticketsByOrderRef.get(ord.order_ref);
+
+        const mtnTxId = ord.mtn_transaction_id || sub?.mtnTransactionId || ticketInfo?.mtn_transaction_id || null;
+        const payerPhone = ord.payer_phone || sub?.payerPhone || ticketInfo?.buyer_phone || ord.buyer_phone || null;
+
+        // Normalize verification status so it is never undefined or missing
+        let verificationStatus = ord.verification_status || sub?.verificationStatus;
+        if (!verificationStatus) {
+          if (ord.status === 'paid') {
+            verificationStatus = 'verified';
+          } else if (ord.status === 'failed' || ord.status === 'cancelled') {
+            verificationStatus = 'rejected';
+          } else if (mtnTxId) {
+            verificationStatus = 'pending_verification';
+          } else {
+            verificationStatus = 'unsubmitted';
+          }
+        }
+
+        orderMap.set(ord.order_ref, {
+          ...ord,
+          verification_status: verificationStatus as any,
+          mtn_transaction_id: mtnTxId,
+          payer_phone: payerPhone,
+          verified_at: ord.verified_at || sub?.verifiedAt || null,
+          verified_by: ord.verified_by || sub?.verifiedBy || null,
+          rejection_reason: ord.rejection_reason || sub?.rejectionReason || null,
+        });
+      }
+
+      // Also ensure any recent memory submissions are present in the list
+      for (const [ref, sub] of _mtnSubmissionsByOrderRef.entries()) {
+        if (!orderMap.has(ref)) {
+          orderMap.set(ref, {
+            id: ref,
+            order_ref: ref,
+            category: 'ORDINARY',
+            quantity: 1,
+            unit_price_ugx: 20000,
+            total_amount_ugx: 20000,
+            status: sub.verificationStatus === 'verified' ? 'paid' : sub.verificationStatus === 'rejected' ? 'failed' : 'pending',
+            verification_status: sub.verificationStatus as any,
+            mtn_transaction_id: sub.mtnTransactionId,
+            payer_phone: sub.payerPhone,
+            verified_at: sub.verifiedAt || null,
+            verified_by: sub.verifiedBy || null,
+            rejection_reason: sub.rejectionReason || null,
+            payment_method: 'mtn_momo_merchant',
+            network: 'MTN',
+            buyer_name: 'Guest',
+            buyer_email: '',
+            buyer_phone: sub.payerPhone,
+            created_at: sub.submittedAt || new Date().toISOString(),
+          } as OrderRow);
+        }
+      }
+
+      const enriched = Array.from(orderMap.values()).sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
 
       return { success: true, orders: enriched };
     } catch {
