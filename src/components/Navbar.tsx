@@ -17,7 +17,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="fixed top-0 left-0 right-0 z-40 bg-[#080c14]/95 backdrop-blur-md border-b border-white/10">
-      <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-18 flex items-center justify-between gap-2 sm:gap-4 lg:gap-8">
+      <div className="w-full max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 h-15 sm:h-18 flex items-center justify-between gap-1.5 sm:gap-4 lg:gap-8">
         
         {/* Zone 1: Brand Wordmark */}
         <a
@@ -26,16 +26,16 @@ export const Navbar: React.FC<NavbarProps> = ({
             e.preventDefault();
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
-          className="flex items-center gap-2 sm:gap-3 min-w-0 shrink group"
+          className="flex items-center gap-1.5 sm:gap-3 min-w-0 shrink group"
         >
-          <div className="w-8 h-8 shrink-0 rounded-lg bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 font-bold text-sm font-display">
+          <div className="w-7 h-7 sm:w-8 sm:h-8 shrink-0 rounded-lg bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 font-bold text-xs sm:text-sm font-display">
             PR
           </div>
-          <div className="flex flex-col min-w-0">
-            <span className="text-[9px] sm:text-[10px] uppercase tracking-wider sm:tracking-widest text-slate-400 font-semibold leading-none truncate">
+          <div className="flex flex-col min-w-0 max-w-[125px] xs:max-w-[165px] sm:max-w-none">
+            <span className="text-[8.5px] sm:text-[10px] uppercase tracking-wider sm:tracking-widest text-slate-400 font-semibold leading-none truncate">
               Prince Resort Bunamwaya
             </span>
-            <span className="text-base sm:text-lg font-black tracking-tight text-white font-display leading-tight group-hover:text-amber-300 transition-colors truncate">
+            <span className="text-sm sm:text-lg font-black tracking-tight text-white font-display leading-tight group-hover:text-amber-300 transition-colors truncate">
               POOL PARTY
             </span>
           </div>
@@ -81,7 +81,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           <a
             href={`tel:${EVENT_DATA.rsvpTel}`}
-            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors whitespace-nowrap"
+            className="hidden md:inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors whitespace-nowrap"
           >
             <Phone className="w-3.5 h-3.5 text-amber-400" />
             <span>RSVP: {EVENT_DATA.rsvpPhone}</span>
@@ -89,7 +89,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={onTicketClick}
-            className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-2.5 text-[11px] sm:text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase font-display"
+            className="inline-flex items-center gap-1 sm:gap-2 px-2.5 sm:px-5 py-2 sm:py-2.5 text-[10.5px] sm:text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase font-display min-h-[38px] sm:min-h-[42px]"
           >
             <Ticket className="w-3.5 h-3.5 shrink-0" />
             <span>Get Tickets</span>
@@ -98,10 +98,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Mobile menu toggle */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="lg:hidden shrink-0 inline-flex items-center justify-center p-2 text-slate-200 hover:text-white rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
+            className="lg:hidden shrink-0 inline-flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 text-slate-200 hover:text-white rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
             aria-label="Toggle menu"
           >
-            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            {mobileMenuOpen ? <X className="w-4 h-4 sm:w-5 sm:h-5" /> : <Menu className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
         </div>
       </div>
@@ -112,33 +112,41 @@ export const Navbar: React.FC<NavbarProps> = ({
           <a
             href="#lineup"
             onClick={() => setMobileMenuOpen(false)}
-            className="block text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white py-2"
+            className="block text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white py-2.5 min-h-[44px] flex items-center"
           >
             Lineup & Activities
           </a>
           <a
             href="#tickets"
             onClick={() => setMobileMenuOpen(false)}
-            className="block text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white py-2"
+            className="block text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white py-2.5 min-h-[44px] flex items-center"
           >
             Tickets (Ordinary 20K / VIP 50K)
           </a>
           <a
             href="#location"
             onClick={() => setMobileMenuOpen(false)}
-            className="block text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white py-2"
+            className="block text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white py-2.5 min-h-[44px] flex items-center"
           >
             Venue: Prince Resort Bunamwaya
           </a>
-          <div className="pt-2 border-t border-white/10 flex items-center justify-between">
+          <a
+            href={`tel:${EVENT_DATA.rsvpTel}`}
+            onClick={() => setMobileMenuOpen(false)}
+            className="block text-xs font-bold uppercase tracking-wider text-amber-300 hover:text-amber-200 py-2.5 min-h-[44px] flex items-center gap-2"
+          >
+            <Phone className="w-3.5 h-3.5 text-amber-400" />
+            <span>Direct RSVP: {EVENT_DATA.rsvpPhone}</span>
+          </a>
+          <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3">
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
                 onOpenScanner();
               }}
-              className="text-xs font-bold uppercase text-cyan-300 flex items-center gap-1.5 py-1"
+              className="text-xs font-bold uppercase text-cyan-300 flex items-center gap-1.5 py-2.5 min-h-[44px] cursor-pointer"
             >
-              <QrCode className="w-3.5 h-3.5" />
+              <QrCode className="w-4 h-4" />
               <span>Gate Scanner</span>
             </button>
             <button
@@ -146,9 +154,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setMobileMenuOpen(false);
                 onOpenAdmin();
               }}
-              className="text-xs font-bold uppercase text-amber-300 flex items-center gap-1.5 py-1"
+              className="text-xs font-bold uppercase text-amber-300 flex items-center gap-1.5 py-2.5 min-h-[44px] cursor-pointer"
             >
-              <Lock className="w-3.5 h-3.5" />
+              <Lock className="w-4 h-4" />
               <span>Staff Admin</span>
             </button>
           </div>

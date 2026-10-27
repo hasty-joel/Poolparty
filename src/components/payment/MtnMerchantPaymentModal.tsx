@@ -272,34 +272,34 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto animate-in fade-in duration-200">
-      <div className="relative w-full max-w-2xl bg-[#080E1E] border border-amber-500/30 rounded-2xl shadow-2xl overflow-hidden my-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 xs:p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto animate-in fade-in duration-200">
+      <div className="relative w-full max-w-xl bg-[#080E1E] border border-amber-500/30 rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col">
         
         {/* MTN MoMo Signature Accent Top Bar */}
-        <div className="h-2 w-full bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900]" />
+        <div className="h-1.5 sm:h-2 w-full bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900] shrink-0" />
 
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#FFCC00] flex items-center justify-center text-slate-950 font-black text-sm shadow-md border border-amber-300">
+        <div className="px-3.5 sm:px-5 py-3 sm:py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#FFCC00] flex items-center justify-center text-slate-950 font-black text-xs sm:text-sm shadow-md border border-amber-300 shrink-0">
               MoMo
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white">MTN Mobile Money Payment</h3>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#FFCC00]/15 text-[#FFCC00] border border-[#FFCC00]/30">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <h3 className="text-sm sm:text-base font-bold text-white truncate">MTN Mobile Money</h3>
+                <span className="text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2 py-0.5 rounded-full bg-[#FFCC00]/15 text-[#FFCC00] border border-[#FFCC00]/30 shrink-0">
                   UGX Merchant
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                Prince Resort Bunamwaya · 11 December 2026
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
+                Prince Resort Bunamwaya · 11 Dec 2026
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer shrink-0 min-w-[36px] min-h-[36px] flex items-center justify-center"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -307,7 +307,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 sm:p-6 space-y-6 max-h-[80vh] overflow-y-auto">
+        <div className="p-3.5 sm:p-5 sm:p-6 space-y-4 sm:space-y-6 max-h-[calc(94vh-65px)] overflow-y-auto">
 
           {/* 1. Confirmed & Paid State: Show Canva Tickets */}
           {status === 'paid' && (
@@ -446,15 +446,15 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
           {status === 'pending' && (
             <>
               {/* Order Summary & Expiry Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-900/80 border border-slate-800">
-                <div>
-                  <span className="text-[11px] text-slate-400 uppercase font-semibold block">Order Reference</span>
+              <div className="flex flex-wrap items-center justify-between gap-2.5 p-3 sm:p-3.5 rounded-xl bg-slate-900/80 border border-slate-800">
+                <div className="min-w-0 max-w-[200px] xs:max-w-none">
+                  <span className="text-[10.5px] text-slate-400 uppercase font-semibold block">Order Reference</span>
                   <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="font-mono text-sm font-bold text-white">{orderRef}</span>
+                    <span className="font-mono text-xs sm:text-sm font-bold text-white break-all">{orderRef}</span>
                     <button
                       type="button"
                       onClick={() => orderRef && copyToClipboard(orderRef, 'ref')}
-                      className="text-slate-400 hover:text-amber-300 p-1 cursor-pointer"
+                      className="text-slate-400 hover:text-amber-300 p-1 cursor-pointer shrink-0 min-w-[28px] min-h-[28px] flex items-center justify-center"
                       title="Copy Order Reference"
                     >
                       {copiedRef ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -462,18 +462,18 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <span className="text-[11px] text-slate-400 uppercase font-semibold block">Total Due</span>
-                  <span className="font-mono text-base font-black text-[#FFCC00]">
+                <div className="text-right shrink-0">
+                  <span className="text-[10.5px] text-slate-400 uppercase font-semibold block">Total Due</span>
+                  <span className="font-mono text-sm sm:text-base font-black text-[#FFCC00]">
                     UGX {totalAmountUgx.toLocaleString()}
                   </span>
                 </div>
 
-                <div className="w-full pt-2 mt-1 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-                  <span className="text-slate-300">
+                <div className="w-full pt-2 mt-1 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-1 text-[11px] sm:text-xs text-slate-400">
+                  <span className="text-slate-300 truncate max-w-[220px] xs:max-w-none">
                     {quantity}x {category} Pass for <strong className="text-white">{buyerName}</strong>
                   </span>
-                  <div className="inline-flex items-center gap-1 text-amber-400 font-mono font-bold">
+                  <div className="inline-flex items-center gap-1 text-amber-400 font-mono font-bold shrink-0">
                     <Clock className="w-3.5 h-3.5" />
                     <span>{formatTimer(secondsRemaining)}</span>
                   </div>
@@ -607,7 +607,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                         onChange={(e) => setTransactionId(e.target.value.toUpperCase())}
                         placeholder="e.g. 1029384756"
                         required
-                        className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-sm focus:outline-none focus:border-amber-400 transition"
+                        className="w-full px-3.5 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-amber-400 transition"
                       />
                       <span className="text-[10px] text-slate-500 mt-1 block">
                         Found in your MTN confirmation SMS
@@ -624,7 +624,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                         onChange={(e) => setPayerPhone(e.target.value)}
                         placeholder="e.g. 0775 198 484"
                         required
-                        className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-sm focus:outline-none focus:border-amber-400 transition"
+                        className="w-full px-3.5 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-amber-400 transition"
                       />
                       <span className="text-[10px] text-slate-500 mt-1 block">
                         The phone line that sent the funds
@@ -641,23 +641,23 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                       value={submissionNotes}
                       onChange={(e) => setSubmissionNotes(e.target.value)}
                       placeholder="e.g. Sent from Michael's secondary line"
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-xs focus:outline-none focus:border-slate-600 transition"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 text-xs min-h-[42px] focus:outline-none focus:border-slate-600 transition"
                     />
                   </div>
 
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900] hover:brightness-110 text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg transition cursor-pointer disabled:opacity-50"
+                    className="w-full min-h-[48px] py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900] hover:brightness-110 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition cursor-pointer disabled:opacity-50 text-center"
                   >
                     {submitting ? (
                       <>
-                        <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
+                        <RefreshCw className="w-4 h-4 animate-spin text-slate-950 shrink-0" />
                         <span>Validating & Submitting...</span>
                       </>
                     ) : (
                       <>
-                        <Send className="w-4 h-4 text-slate-950" />
+                        <Send className="w-4 h-4 text-slate-950 shrink-0" />
                         <span>Submit MTN Transaction for Verification</span>
                       </>
                     )}

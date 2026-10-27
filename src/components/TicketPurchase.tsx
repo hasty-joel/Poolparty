@@ -207,27 +207,27 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   };
 
   return (
-    <section id="tickets" className="py-20 bg-[#080c14] relative border-b border-white/10">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+    <section id="tickets" className="py-12 sm:py-20 bg-[#080c14] relative border-b border-white/10">
+      <div className="max-w-6xl mx-auto px-3.5 sm:px-6 lg:px-8">
         
         {/* Section Header */}
-        <div className="max-w-2xl mb-10">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 mb-1">
+        <div className="max-w-2xl mb-8 sm:mb-10">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs font-semibold text-slate-400 mb-1">
             <span className="text-amber-400 font-bold uppercase tracking-wider">Official Ticketing</span>
             <span aria-hidden="true">·</span>
             <span>Capacity strictly limited to 70 total passes</span>
           </div>
-          <h2 className="text-3xl sm:text-4xl font-black text-white font-display">
+          <h2 className="text-2xl xs:text-3xl sm:text-4xl font-black text-white font-display">
             Select Your Pool Pass
           </h2>
-          <p className="text-slate-400 text-sm mt-2">
+          <p className="text-slate-400 text-xs sm:text-sm mt-2">
             Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000). Official MTN Mobile Money Merchant Payments.
           </p>
 
           <div className="mt-3">
             <button
               onClick={() => setLookupOpen(true)}
-              className="text-xs text-cyan-400 hover:text-cyan-300 font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              className="text-xs text-cyan-400 hover:text-cyan-300 font-medium inline-flex items-center gap-1.5 cursor-pointer py-1"
             >
               <Search className="w-3.5 h-3.5" />
               <span>Already purchased? Retrieve & download your tickets</span>
@@ -236,13 +236,13 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         </div>
 
         {/* Tier Selector Buttons */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 max-w-2xl mb-6 sm:mb-8">
           
           {/* Ordinary Tier Button */}
           <button
             type="button"
             onClick={() => handleTierChange('ordinary')}
-            className={`p-5 rounded-xl border text-left transition-colors cursor-pointer relative ${
+            className={`p-3.5 sm:p-5 rounded-xl border text-left transition-colors cursor-pointer relative ${
               selectedTier === 'ordinary'
                 ? 'bg-[#0d1522] border-amber-400'
                 : 'bg-[#0d1522]/50 border-white/10 hover:border-white/20'
@@ -281,7 +281,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
           <button
             type="button"
             onClick={() => handleTierChange('vip')}
-            className={`p-5 rounded-xl border text-left transition-colors cursor-pointer relative ${
+            className={`p-3.5 sm:p-5 rounded-xl border text-left transition-colors cursor-pointer relative ${
               selectedTier === 'vip'
                 ? 'bg-[#0d1522] border-cyan-400'
                 : 'bg-[#0d1522]/50 border-white/10 hover:border-white/20'
@@ -321,7 +321,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
         {/* Database Offline Error Banner */}
         {countsError && (
-          <div className="max-w-2xl mb-6 p-4 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-3">
+          <div className="max-w-2xl mb-6 p-3.5 sm:p-4 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
               <span>{countsError}</span>
@@ -329,7 +329,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             <button
               type="button"
               onClick={refreshCounts}
-              className="px-2.5 py-1 bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 rounded font-semibold text-[11px] cursor-pointer inline-flex items-center gap-1"
+              className="px-2.5 py-1 bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 rounded font-semibold text-[11px] cursor-pointer inline-flex items-center gap-1 min-h-[36px]"
             >
               <RefreshCw className={`w-3 h-3 ${loadingCounts ? 'animate-spin' : ''}`} />
               <span>Retry</span>
@@ -339,14 +339,14 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
 
         {errors.inventory && (
-          <div className="max-w-2xl mb-6 p-4 rounded-xl bg-rose-950/60 border border-rose-500 text-rose-200 text-xs flex items-center gap-2">
+          <div className="max-w-2xl mb-6 p-3.5 sm:p-4 rounded-xl bg-rose-950/60 border border-rose-500 text-rose-200 text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
             <span>{errors.inventory}</span>
           </div>
         )}
 
         {/* Checkout Card */}
-        <div className="bg-[#0d1522] border border-white/10 rounded-2xl p-6 sm:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
           
           {/* Order Summary & Quantity (5 cols) */}
           <div className="lg:col-span-5 border-b lg:border-b-0 lg:border-r border-white/10 pb-6 lg:pb-0 lg:pr-8 flex flex-col justify-between">
@@ -354,7 +354,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-1">
                 Order Summary
               </span>
-              <h3 className="text-xl font-bold text-white font-display">
+              <h3 className="text-lg sm:text-xl font-bold text-white font-display">
                 {tierInfo.name} Ticket
               </h3>
               <p className="text-xs text-slate-400 mt-1">
@@ -362,7 +362,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               </p>
 
               {/* Perks list */}
-              <div className="mt-5 space-y-2.5 text-xs text-slate-300">
+              <div className="mt-4 sm:mt-5 space-y-2 text-xs text-slate-300">
                 {tierInfo.perks.map((perk, idx) => (
                   <div key={idx} className="flex items-center gap-2">
                     <CheckCircle2 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -372,7 +372,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               </div>
 
               {/* Quantity Picker */}
-              <div className="mt-8 pt-6 border-t border-white/10">
+              <div className="mt-6 sm:mt-8 pt-5 sm:pt-6 border-t border-white/10">
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">
                   Select Quantity
                 </label>
@@ -381,11 +381,12 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                     type="button"
                     onClick={() => handleQuantityChange(-1)}
                     disabled={quantity <= 1}
-                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer transition-colors"
+                    className="w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer transition-colors"
+                    aria-label="Decrease quantity"
                   >
                     <Minus className="w-4 h-4" />
                   </button>
-                  <div className="text-center">
+                  <div className="text-center px-2">
                     <span className="text-2xl font-bold text-white font-mono tabular-nums">
                       {quantity}
                     </span>
@@ -402,7 +403,8 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                         ? Math.min(10, remainingInventory)
                         : 10)
                     }
-                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer disabled:cursor-not-allowed transition-colors"
+                    className="w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer disabled:cursor-not-allowed transition-colors"
+                    aria-label="Increase quantity"
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -411,7 +413,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             </div>
 
             {/* Price Calculation */}
-            <div className="mt-8 pt-6 border-t border-white/10 bg-[#080c14] p-4 rounded-xl border border-white/5">
+            <div className="mt-6 sm:mt-8 pt-5 sm:pt-6 border-t border-white/10 bg-[#080c14] p-3.5 sm:p-4 rounded-xl border border-white/5">
               <div className="space-y-1 text-xs text-slate-300">
                 <div className="flex justify-between">
                   <span>Unit Price</span>
@@ -424,7 +426,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               </div>
               <div className="mt-3 pt-3 border-t border-white/10 flex justify-between items-baseline">
                 <span className="text-xs uppercase font-bold text-slate-300">Total Due</span>
-                <span className="text-2xl font-black text-amber-300 font-mono tabular-nums">
+                <span className="text-xl sm:text-2xl font-black text-amber-300 font-mono tabular-nums">
                   UGX {totalPrice.toLocaleString()}
                 </span>
               </div>
@@ -453,7 +455,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   value={form.fullName}
                   onChange={(e) => setForm({ ...form, fullName: e.target.value })}
                   placeholder="e.g. Joel Mukisa"
-                  className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
+                  className={`w-full px-3.5 sm:px-4 py-3 sm:py-2.5 rounded-lg bg-[#080c14] border text-white text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-amber-400 transition-colors ${
                     errors.fullName ? 'border-rose-500' : 'border-white/15'
                   }`}
                 />
@@ -470,7 +472,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                   placeholder="joel@example.ug"
-                  className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
+                  className={`w-full px-3.5 sm:px-4 py-3 sm:py-2.5 rounded-lg bg-[#080c14] border text-white text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-amber-400 transition-colors ${
                     errors.email ? 'border-rose-500' : 'border-white/15'
                   }`}
                 />
@@ -487,7 +489,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
                   placeholder="0775 198 484 or +256 701 234567"
-                  className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
+                  className={`w-full px-3.5 sm:px-4 py-3 sm:py-2.5 rounded-lg bg-[#080c14] border text-white text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-amber-400 transition-colors ${
                     errors.phone ? 'border-rose-500' : 'border-white/15'
                   }`}
                 />
@@ -503,23 +505,23 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   Payment Method
                 </label>
                 
-                <div className="p-4 rounded-xl border border-amber-400/50 bg-[#121c2e]/90 text-white relative overflow-hidden">
+                <div className="p-3.5 sm:p-4 rounded-xl border border-amber-400/50 bg-[#121c2e]/90 text-white relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-amber-400/5 rounded-full blur-2xl pointer-events-none" />
 
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-11 h-11 rounded-xl bg-[#FFCC00] text-black font-black flex flex-col items-center justify-center shrink-0 shadow-md">
-                      <span className="text-[12px] leading-tight font-black tracking-tight">MTN</span>
-                      <span className="text-[9px] font-bold tracking-tighter uppercase">MoMo</span>
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-[#FFCC00] text-black font-black flex flex-col items-center justify-center shrink-0 shadow-md">
+                      <span className="text-[11px] sm:text-[12px] leading-tight font-black tracking-tight">MTN</span>
+                      <span className="text-[8.5px] sm:text-[9px] font-bold tracking-tighter uppercase">MoMo</span>
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-bold text-white">MTN Mobile Money Merchant Payment</span>
-                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                        <span className="text-xs sm:text-sm font-bold text-white">MTN Mobile Money Merchant Payment</span>
+                        <span className="text-[9.5px] sm:text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30">
                           MoMoPay / USSD
                         </span>
                       </div>
-                      <p className="text-xs text-slate-300 mt-1">
+                      <p className="text-xs text-slate-300 mt-1 leading-relaxed">
                         Pay securely using MTN MoMo merchant code and enter your transaction ID to verify your pass.
                       </p>
 
@@ -537,7 +539,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                       )}
 
                       {mtnConfig?.configured && (
-                        <div className="mt-2.5 p-2.5 rounded-lg bg-[#080c14]/80 border border-white/10 flex items-center justify-between gap-2">
+                        <div className="mt-2.5 p-2.5 rounded-lg bg-[#080c14]/80 border border-white/10 flex flex-wrap items-center justify-between gap-2">
                           <div className="text-xs">
                             <span className="text-slate-400 block text-[10px] uppercase font-mono">Merchant Code</span>
                             <span className="font-mono font-bold text-amber-300 text-sm tracking-wider">
@@ -577,26 +579,24 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 <button
                   type="submit"
                   disabled={isSubmitting || isTierSoldOut}
-                  className="w-full py-3.5 text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2 font-display"
+                  className="w-full min-h-[48px] py-3.5 px-4 text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-lg shadow-sm cursor-pointer uppercase flex items-center justify-center gap-2 font-display text-center leading-snug"
                 >
                   {isSubmitting ? (
                     <div className="flex items-center gap-2">
-                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
                       <span>Locking Pass & Generating Reference...</span>
                     </div>
                   ) : isTierSoldOut ? (
                     <span>{selectedTier.toUpperCase()} Passes Sold Out</span>
                   ) : (
-                    <>
-                      <span>
-                        Reserve Passes & Pay with MTN MoMo · UGX {totalPrice.toLocaleString()}
-                      </span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
+                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                      <span>Reserve Passes & Pay with MTN MoMo · UGX {totalPrice.toLocaleString()}</span>
+                      <ArrowRight className="w-4 h-4 shrink-0" />
+                    </div>
                   )}
                 </button>
 
-                <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 mt-3">
+                <div className="flex items-center justify-center gap-2 text-[10.5px] sm:text-[11px] text-slate-400 mt-3 text-center">
                   <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                   <span>15-Minute Reservation Lock · Verified & Issued by Event Admin</span>
                 </div>

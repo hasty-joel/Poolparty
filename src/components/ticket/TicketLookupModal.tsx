@@ -44,22 +44,22 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 overflow-y-auto bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 xs:p-3 sm:p-6 overflow-y-auto bg-black/85 backdrop-blur-sm">
       <div 
-        className="relative w-full max-w-lg bg-[#0d1522] border border-white/15 rounded-2xl shadow-2xl overflow-hidden my-6 flex flex-col"
+        className="relative w-full max-w-lg bg-[#0d1522] border border-white/15 rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden my-auto flex flex-col max-h-[94vh]"
         role="dialog"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-[#080c14] border-b border-white/10 shrink-0">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 bg-[#080c14] border-b border-white/10 shrink-0">
           <div className="flex items-center gap-2">
-            <Search className="w-4 h-4 text-amber-400" />
+            <Search className="w-4 h-4 text-amber-400 shrink-0" />
             <h3 className="text-sm sm:text-base font-bold text-white font-display">
               Retrieve My Purchased Tickets
             </h3>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer shrink-0 min-w-[36px] min-h-[36px] flex items-center justify-center"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -67,9 +67,9 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4 overflow-y-auto max-h-[calc(94vh-65px)]">
           <p className="text-xs text-slate-400 leading-relaxed">
-            Enter the phone number you entered at checkout (e.g. <span className="font-mono text-slate-300">0775...</span>) or your order reference (e.g. <span className="font-mono text-slate-300">PP-RWX-...</span>).
+            Enter the phone number you entered at checkout (e.g. <span className="font-mono text-slate-300">0775...</span>) or your order reference (e.g. <span className="font-mono text-slate-300">PP-RWX-...</span> or <span className="font-mono text-slate-300">PP-MOMO-...</span>).
           </p>
 
           <form onSubmit={handleSearch} className="space-y-3">
@@ -81,8 +81,8 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
                 type="text"
                 value={contact}
                 onChange={(e) => setContact(e.target.value)}
-                placeholder="e.g. 0775 198 484 or PP-RWX-..."
-                className="w-full px-4 py-2.5 bg-[#080c14] border border-white/15 rounded-lg text-white text-sm focus:border-amber-400 focus:outline-none transition-colors"
+                placeholder="e.g. 0775 198 484 or PP-..."
+                className="w-full px-3.5 py-3 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm min-h-[46px] focus:border-amber-400 focus:outline-none transition-colors"
                 required
               />
             </div>
@@ -90,7 +90,7 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
             <button
               type="submit"
               disabled={loading || !contact.trim()}
-              className="w-full py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
+              className="w-full min-h-[44px] py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
             >
               {loading ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
@@ -123,7 +123,7 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
                       onSelectTicket(t);
                       onClose();
                     }}
-                    className="p-3.5 rounded-xl bg-[#080c14] border border-white/10 hover:border-amber-400/60 flex items-center justify-between cursor-pointer transition-colors group"
+                    className="p-3 sm:p-3.5 rounded-xl bg-[#080c14] border border-white/10 hover:border-amber-400/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 cursor-pointer transition-colors group"
                   >
                     <div>
                       <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
@@ -139,7 +139,7 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
                       </p>
                     </div>
 
-                    <button className="px-3 py-1.5 rounded-lg bg-amber-400 text-slate-950 text-xs font-bold group-hover:bg-amber-300 transition-colors">
+                    <button className="w-full sm:w-auto px-3 py-2 rounded-lg bg-amber-400 text-slate-950 text-xs font-bold group-hover:bg-amber-300 transition-colors text-center min-h-[36px]">
                       View & Download
                     </button>
                   </div>

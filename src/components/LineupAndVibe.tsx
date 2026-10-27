@@ -4,27 +4,27 @@ import { EVENT_DATA } from '../types/event';
 
 export const LineupAndVibe: React.FC = () => {
   return (
-    <section id="lineup" className="py-20 bg-[#080c14] relative border-b border-white/10">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <section id="lineup" className="py-12 sm:py-20 bg-[#080c14] relative border-b border-white/10">
+      <div className="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8">
         
         {/* Section Header */}
-        <div className="max-w-2xl mb-12">
+        <div className="max-w-2xl mb-8 sm:mb-12">
           <span className="text-xs font-bold tracking-widest text-amber-400 uppercase block mb-1">
             Confirmed Artists & Activities
           </span>
-          <h2 className="text-3xl sm:text-4xl font-black text-white font-display">
+          <h2 className="text-2xl xs:text-3xl sm:text-4xl font-black text-white font-display">
             The Official Event Lineup
           </h2>
-          <p className="text-slate-400 text-sm mt-2">
+          <p className="text-slate-400 text-xs sm:text-sm mt-2">
             Poolside entertainment and music curation hosted by Trevor DJ with an exclusive Special Surprise Headliner.
           </p>
         </div>
 
         {/* Host & Headliner Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-10">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 mb-8 sm:mb-10">
           
           {/* Host Card */}
-          <div className="bg-[#0d1522] p-6 rounded-xl border border-white/10 flex flex-col justify-between space-y-4">
+          <div className="bg-[#0d1522] p-4 sm:p-6 rounded-xl border border-white/10 flex flex-col justify-between space-y-4">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
                 Official Event Host

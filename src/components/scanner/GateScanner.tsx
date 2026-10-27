@@ -72,36 +72,36 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
   };
 
   return (
-    <div className="min-h-screen bg-[#080c14] text-slate-100 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-4xl mx-auto space-y-6">
+    <div className="min-h-screen bg-[#080c14] text-slate-100 p-3 sm:p-6 lg:p-8">
+      <div className="max-w-4xl mx-auto space-y-4 sm:space-y-6">
         
         {/* Top Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/10">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 pb-4 border-b border-white/10">
+          <div className="flex items-center gap-2.5 sm:gap-3">
             <button
               onClick={onBack}
-              className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+              className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer shrink-0"
               title="Return to Main Website"
             >
               <ArrowLeft className="w-5 h-5 text-amber-400" />
             </button>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-white font-display">
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-2xl font-bold text-white font-display truncate">
                 Gate Entry Scanner
               </h1>
-              <p className="text-xs text-slate-400">
-                Prince Resort Bunamwaya · Single-Scan QR Token Verification & Atomic Check-In
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
+                Prince Resort Bunamwaya · Single-Scan QR Token Verification
               </p>
             </div>
           </div>
 
-          <div className="text-xs text-slate-400 font-mono">
+          <div className="text-[11px] sm:text-xs text-slate-400 font-mono">
             Checkpoint: <span className="text-amber-300 font-semibold">Pool Gate 1</span>
           </div>
         </div>
 
         {/* Verification Input Box */}
-        <div className="bg-[#0d1522] border border-white/10 rounded-2xl p-6 sm:p-8 shadow-lg">
+        <div className="bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-4 sm:p-6 lg:p-8 shadow-lg">
           <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">
             Scan Barcode / QR Code, Paste Verification URL, or Enter Ticket Number
           </label>
@@ -111,15 +111,15 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
               e.preventDefault();
               handleVerify();
             }}
-            className="flex flex-col sm:flex-row gap-3"
+            className="flex flex-col sm:flex-row gap-2.5 sm:gap-3"
           >
             <div className="relative flex-1">
               <input
                 type="text"
                 value={inputCode}
                 onChange={(e) => setInputCode(e.target.value)}
-                placeholder="Scan QR token UUID or type ticket number (e.g. VIP-001, ORD-001)"
-                className="w-full px-4 py-3 pl-10 bg-[#080c14] border border-white/15 rounded-lg text-white text-sm font-mono placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors"
+                placeholder="Scan QR token or type ticket number (e.g. VIP-001)"
+                className="w-full px-3.5 py-3 pl-10 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm font-mono placeholder-slate-500 min-h-[46px] focus:outline-none focus:border-amber-400 transition-colors"
                 autoFocus
               />
               <QrCode className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
@@ -128,16 +128,16 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
             <button
               type="submit"
               disabled={isVerifying || !inputCode.trim()}
-              className="px-6 py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-950 font-bold text-xs uppercase tracking-wider rounded-lg transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2"
+              className="w-full sm:w-auto min-h-[46px] px-6 py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-950 font-bold text-xs uppercase tracking-wider rounded-lg transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-2"
             >
               {isVerifying ? (
                 <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
                   <span>Verifying...</span>
                 </>
               ) : (
                 <>
-                  <Search className="w-4 h-4" />
+                  <Search className="w-4 h-4 shrink-0" />
                   <span>Verify Pass</span>
                 </>
               )}

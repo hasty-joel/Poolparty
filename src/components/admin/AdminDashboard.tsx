@@ -363,8 +363,8 @@ notify pgrst, 'reload schema';`;
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#080c14] flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-2xl p-8 shadow-2xl text-center space-y-6">
+      <div className="min-h-screen bg-[#080c14] flex items-center justify-center p-3 sm:p-4">
+        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-5 sm:p-8 shadow-2xl text-center space-y-5 sm:space-y-6">
           <div className="w-12 h-12 rounded-xl bg-amber-400/10 border border-amber-400/20 text-amber-400 flex items-center justify-center mx-auto">
             <Lock className="w-6 h-6" />
           </div>
@@ -394,14 +394,14 @@ notify pgrst, 'reload schema';`;
                 value={passcode}
                 onChange={(e) => setPasscode(e.target.value)}
                 placeholder="Enter passcode (default: prince2026)"
-                className="w-full px-4 py-2.5 bg-[#080c14] border border-white/15 rounded-lg text-white text-sm focus:outline-none focus:border-amber-400 font-mono transition-colors"
+                className="w-full px-3.5 sm:px-4 py-3 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-amber-400 font-mono transition-colors"
                 autoFocus
               />
             </div>
 
             <button
               type="submit"
-              className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+              className="w-full min-h-[46px] py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
             >
               Sign In to Dashboard
             </button>
@@ -411,7 +411,7 @@ notify pgrst, 'reload schema';`;
             <span>Passcode: <strong className="text-amber-300 font-mono">prince2026</strong></span>
             <button
               onClick={onBack}
-              className="text-cyan-400 hover:underline cursor-pointer"
+              className="text-cyan-400 hover:underline cursor-pointer py-1"
             >
               Back to Website
             </button>
@@ -422,28 +422,28 @@ notify pgrst, 'reload schema';`;
   }
 
   return (
-    <div className="min-h-screen bg-[#080c14] text-slate-100 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-[#080c14] text-slate-100 p-3 sm:p-6 lg:p-8">
+      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6">
         
         {/* Top Navbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-white/10">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 sm:gap-4 pb-4 border-b border-white/10">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <button
               onClick={onBack}
-              className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+              className="p-2 min-w-[38px] min-h-[38px] flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer shrink-0"
               title="Return to Public Website"
             >
               <ArrowLeft className="w-5 h-5 text-amber-400" />
             </button>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <Crown className="w-4 h-4 text-amber-400" />
-                <h1 className="text-xl font-bold text-white font-display">
-                  Pool Party Inventory & Sales Management
+                <Crown className="w-4 h-4 text-amber-400 shrink-0" />
+                <h1 className="text-lg sm:text-xl font-bold text-white font-display truncate">
+                  Pool Party Inventory & Sales
                 </h1>
               </div>
-              <p className="text-xs text-slate-400">
-                Pre-Allocated 70 Tickets (20 VIP @ 50K | 50 ORD @ 20K) · Prince Resort Bunamwaya Bella
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">
+                Pre-Allocated 70 Tickets (20 VIP @ 50K | 50 ORD @ 20K) · Prince Resort
               </p>
             </div>
           </div>
@@ -657,17 +657,17 @@ notify pgrst, 'reload schema';`;
           const pendingMtnCount = orders.filter((o) => o.verification_status === 'pending_verification').length;
           const totalMtnOrders = orders.filter((o) => o.payment_method === 'mtn_momo' || o.network === 'MTN' || o.mtn_transaction_id).length;
           return (
-            <div className="flex flex-wrap items-center gap-2 border-b border-white/10 pb-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 border-b border-white/10 pb-2 overflow-x-auto scrollbar-none -mx-3 px-3 sm:mx-0 sm:px-0 whitespace-nowrap">
               <button
                 onClick={() => setActiveTab('mtn_payments')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-2 ${
-                  activeTab === 'mtn_payments' ? 'bg-[#FFCC00] text-slate-950 font-black' : 'text-slate-400 hover:text-white'
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-2 shrink-0 min-h-[38px] ${
+                  activeTab === 'mtn_payments' ? 'bg-[#FFCC00] text-slate-950 font-black' : 'text-slate-400 hover:text-white bg-white/5'
                 }`}
               >
                 <span>MTN MoMo Desk</span>
                 {pendingMtnCount > 0 ? (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-black bg-rose-600 text-white animate-pulse">
-                    {pendingMtnCount} Awaiting Review
+                    {pendingMtnCount} Review
                   </span>
                 ) : (
                   <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-800 text-amber-300 font-mono">
@@ -677,35 +677,35 @@ notify pgrst, 'reload schema';`;
               </button>
               <button
                 onClick={() => setActiveTab('inventory')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-                  activeTab === 'inventory' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 min-h-[38px] ${
+                  activeTab === 'inventory' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white bg-white/5'
                 }`}
               >
-                All 70 Inventory Tickets ({tickets.length})
+                70 Inventory ({tickets.length})
               </button>
               <button
                 onClick={() => setActiveTab('orders')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
-                  activeTab === 'orders' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 min-h-[38px] ${
+                  activeTab === 'orders' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white bg-white/5'
                 }`}
               >
                 <span>All Orders ({orders.length})</span>
               </button>
               <button
                 onClick={() => setActiveTab('physical_sale')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-                  activeTab === 'physical_sale' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 min-h-[38px] ${
+                  activeTab === 'physical_sale' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white bg-white/5'
                 }`}
               >
-                Record Physical Staff Sale
+                Record Cash Sale
               </button>
               <button
                 onClick={() => setActiveTab('setup_guide')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-                  activeTab === 'setup_guide' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 min-h-[38px] ${
+                  activeTab === 'setup_guide' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white bg-white/5'
                 }`}
               >
-                Setup & SQL Guide
+                Setup Guide
               </button>
             </div>
           );
@@ -853,8 +853,184 @@ notify pgrst, 'reload schema';`;
               }
 
               return (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
+                <div className="space-y-4">
+                  {/* Mobile Order Cards */}
+                  <div className="block lg:hidden space-y-3">
+                    {mtnOrders.map((ord) => {
+                      const isVip = ord.category === 'VIP';
+                      const isPendingReview = ord.verification_status === 'pending_verification';
+                      const isVerified = ord.verification_status === 'verified';
+                      const isRejected = ord.verification_status === 'rejected';
+
+                      return (
+                        <div
+                          key={`mobile-${ord.id || ord.order_ref}`}
+                          className="bg-[#030712] border border-white/10 rounded-xl p-3.5 space-y-3"
+                        >
+                          {/* Top Row: Ref & Tier */}
+                          <div className="flex items-start justify-between gap-2 border-b border-white/5 pb-2">
+                            <div className="min-w-0">
+                              <span className="font-mono text-xs font-bold text-cyan-300 break-all block">
+                                {ord.order_ref}
+                              </span>
+                              <span className="text-[10px] text-slate-500 block">
+                                {new Date(ord.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                              </span>
+                            </div>
+                            <span className={`shrink-0 font-extrabold text-[10px] uppercase px-2 py-0.5 rounded ${
+                              isVip ? 'bg-cyan-950 text-cyan-300 border border-cyan-800' : 'bg-amber-950 text-amber-300 border border-amber-800'
+                            }`}>
+                              {ord.quantity}× {ord.category}
+                            </span>
+                          </div>
+
+                          {/* Attendee Info */}
+                          <div className="text-xs space-y-0.5">
+                            <span className="font-bold text-white block">{ord.buyer_name}</span>
+                            <span className="text-slate-400 font-mono text-[11px] block">{ord.buyer_phone}</span>
+                            <span className="text-slate-500 text-[10px] block truncate">{ord.buyer_email}</span>
+                          </div>
+
+                          {/* MTN Tx ID Box */}
+                          <div className="bg-[#080c14] p-2.5 rounded-lg border border-white/10 flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <span className="text-[9.5px] uppercase text-slate-400 font-bold block">MTN Tx ID</span>
+                              {ord.mtn_transaction_id ? (
+                                <span className="font-mono font-bold text-amber-300 text-xs break-all block">
+                                  {ord.mtn_transaction_id}
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-slate-500 italic block">Awaiting submission</span>
+                              )}
+                            </div>
+                            {ord.mtn_transaction_id && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(ord.mtn_transaction_id);
+                                  setCopiedTxId(ord.mtn_transaction_id);
+                                  setTimeout(() => setCopiedTxId(null), 2000);
+                                }}
+                                className="px-2.5 py-1.5 bg-amber-400/20 text-amber-300 hover:bg-amber-400/30 text-xs font-bold rounded-md flex items-center gap-1 cursor-pointer shrink-0 min-h-[32px]"
+                              >
+                                {copiedTxId === ord.mtn_transaction_id ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>Copied</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3.5 h-3.5" />
+                                    <span>Copy</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Price & Status Row */}
+                          <div className="flex items-center justify-between text-xs pt-1">
+                            <div>
+                              <span className="text-[10px] uppercase text-slate-400 block font-semibold">Total Amount</span>
+                              <span className="font-mono font-bold text-white text-sm">
+                                UGX {Number(ord.total_amount_ugx).toLocaleString()}
+                              </span>
+                            </div>
+                            <div>
+                              {isPendingReview ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 animate-pulse">
+                                  <Clock className="w-3 h-3" />
+                                  <span>Pending Review</span>
+                                </span>
+                              ) : isVerified ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Verified & Issued</span>
+                                </span>
+                              ) : isRejected ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-700">
+                                  <XCircle className="w-3 h-3" />
+                                  <span>Rejected</span>
+                                </span>
+                              ) : (
+                                <span className="inline-block font-medium text-[10px] uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                                  Unsubmitted
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons for Mobile */}
+                          {isPendingReview && (
+                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                              <button
+                                type="button"
+                                onClick={() => handleVerifyMtnOrder(ord.order_ref)}
+                                disabled={verifyingMtnOrderRef === ord.order_ref}
+                                className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs uppercase rounded-lg flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
+                              >
+                                {verifyingMtnOrderRef === ord.order_ref ? (
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                )}
+                                <span>Verify & Issue</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRejectModalOrder(ord);
+                                  setRejectReason('Transaction ID could not be confirmed on MTN MoMo merchant statement');
+                                }}
+                                className="py-2.5 px-3 bg-rose-950/60 hover:bg-rose-900 border border-rose-700/50 text-rose-300 text-xs font-bold uppercase rounded-lg cursor-pointer min-h-[42px]"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          )}
+
+                          {isVerified && (
+                            <div className="flex items-center gap-2 pt-2 border-t border-white/5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const tList = tickets.filter((t) => t.order_ref === ord.order_ref);
+                                  if (tList.length > 0) {
+                                    onViewTicket(tList[0]);
+                                  } else {
+                                    setActiveTab('inventory');
+                                    setActionSuccess('Switched to Inventory tab to view passes.');
+                                  }
+                                }}
+                                className="flex-1 py-2 px-3 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg cursor-pointer text-center min-h-[38px]"
+                              >
+                                View Pass
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const tList = tickets.filter((t) => t.order_ref === ord.order_ref);
+                                  if (tList.length > 0) {
+                                    await handleReprintPdf(tList[0]);
+                                  } else {
+                                    setActionError('No ticket record found for reprint.');
+                                  }
+                                }}
+                                className="py-2 px-3 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 text-xs font-bold rounded-lg flex items-center justify-center gap-1 cursor-pointer min-h-[38px]"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                <span>PDF</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Desktop Table */}
+                  <div className="hidden lg:block overflow-x-auto">
+                    <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="border-b border-white/10 text-slate-400 uppercase text-[10px] tracking-wider">
                         <th className="py-3 px-3">Order Ref / Time</th>
@@ -1049,28 +1225,29 @@ notify pgrst, 'reload schema';`;
                     </tbody>
                   </table>
                 </div>
-              );
-            })()}
+              </div>
+            );
+          })()}
           </div>
         )}
 
         {/* Rejection Reason Modal */}
         {rejectModalOrder && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <div className="bg-[#0b1220] border-2 border-rose-500/60 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 xs:p-3 sm:p-4 bg-black/85 backdrop-blur-sm overflow-y-auto">
+            <div className="bg-[#0b1220] border-2 border-rose-500/60 rounded-xl sm:rounded-2xl p-4 sm:p-6 max-w-md w-full space-y-3.5 sm:space-y-4 shadow-2xl my-auto max-h-[94vh] overflow-y-auto">
               <div className="flex items-center gap-2 text-rose-400">
                 <AlertCircle className="w-5 h-5 shrink-0" />
-                <h4 className="text-base font-bold text-white font-display">
+                <h4 className="text-sm sm:text-base font-bold text-white font-display">
                   Reject MTN Mobile Money Payment
                 </h4>
               </div>
 
               <div className="text-xs text-slate-300 space-y-1">
                 <p>
-                  You are rejecting order <strong className="font-mono text-cyan-300">{rejectModalOrder.order_ref}</strong> for <strong className="text-white">{rejectModalOrder.buyer_name}</strong>.
+                  You are rejecting order <strong className="font-mono text-cyan-300 break-all">{rejectModalOrder.order_ref}</strong> for <strong className="text-white">{rejectModalOrder.buyer_name}</strong>.
                 </p>
                 <p className="text-slate-400">
-                  Transaction ID submitted: <strong className="font-mono text-amber-300">{rejectModalOrder.mtn_transaction_id || 'None'}</strong>
+                  Transaction ID: <strong className="font-mono text-amber-300 break-all">{rejectModalOrder.mtn_transaction_id || 'None'}</strong>
                 </p>
                 <p className="text-amber-300 font-semibold pt-1">
                   The {rejectModalOrder.quantity} reserved {rejectModalOrder.category} pass(es) will be released back to Available Inventory immediately.
@@ -1085,17 +1262,17 @@ notify pgrst, 'reload schema';`;
                   value={rejectReason}
                   onChange={(e) => setRejectReason(e.target.value)}
                   rows={3}
-                  className="w-full px-3 py-2 bg-[#030712] border border-white/15 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-400"
+                  className="w-full px-3 py-2.5 bg-[#030712] border border-white/15 rounded-xl text-base sm:text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-400"
                   placeholder="e.g. Transaction ID was not found on our MTN MoMo statement, or amount was incorrect."
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
                   disabled={isRejecting}
                   onClick={() => setRejectModalOrder(null)}
-                  className="px-3 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white cursor-pointer"
+                  className="w-full sm:w-auto min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -1103,7 +1280,7 @@ notify pgrst, 'reload schema';`;
                   type="button"
                   disabled={isRejecting || !rejectReason.trim()}
                   onClick={handleConfirmRejectMtn}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center gap-1.5 transition-colors"
+                  className="w-full sm:w-auto min-h-[42px] px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
                 >
                   {isRejecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
                   <span>Confirm Reject & Release Stock</span>
