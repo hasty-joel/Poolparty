@@ -383,3 +383,6 @@ begin
   );
 end;
 $$;
+
+-- 10. Reload PostgREST schema cache immediately
+notify pgrst, 'reload schema';

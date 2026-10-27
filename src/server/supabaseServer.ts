@@ -128,15 +128,63 @@ function isMissingRpcError(err: any): boolean {
     code === 'PGRST202' ||
     code === '42883' ||
     msg.includes('could not find the function') ||
-    msg.includes('does not exist')
+    (msg.includes('function') && msg.includes('does not exist'))
   );
+}
+
+function isMissingRelationError(err: any, relationName?: string): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  const isRelationMissing =
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    msg.includes('could not find the table') ||
+    (msg.includes('relation') && msg.includes('does not exist'));
+
+  if (!isRelationMissing) return false;
+  if (!relationName) return true;
+  return msg.includes(relationName.toLowerCase());
+}
+
+function classifySchemaError(err: any, fallbackMessage: string): { message: string; error: string } {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '');
+  const lower = msg.toLowerCase();
+
+  if (code === 'PGRST204' || code === '42703' || (lower.includes('column') && (lower.includes('schema cache') || lower.includes('does not exist')))) {
+    return {
+      message:
+        "Database schema update or cache reload required on public.tickets (missing order_ref, reserved_until, or relworx_internal_ref, or PostgREST schema cache not refreshed).",
+      error: 'SCHEMA_MISMATCH',
+    };
+  }
+
+  if (isMissingRelationError(err)) {
+    return {
+      message:
+        "Database schema setup is incomplete or schema cache has not refreshed yet. Run NOTIFY pgrst, 'reload schema'; in Supabase SQL Editor and retry.",
+      error: 'SCHEMA_MISMATCH',
+    };
+  }
+
+  return {
+    message: fallbackMessage,
+    error: 'DATABASE_ERROR',
+  };
 }
 
 export const SupabaseServerService = {
   /**
-   * Health Check: Test connection to live Supabase project
+   * Health Check: Read-only connection & schema readiness check against live Supabase project
    */
-  async checkConnection(): Promise<{ connected: boolean; count: number; error?: string }> {
+  async checkConnection(): Promise<{
+    connected: boolean;
+    count: number;
+    ticketsSchemaReady?: boolean;
+    ordersTableReady?: boolean;
+    schemaWarning?: string;
+    error?: string;
+  }> {
     const { client, configError } = getSupabaseClient();
     if (!client) {
       return {
@@ -155,7 +203,34 @@ export const SupabaseServerService = {
         return { connected: false, count: 0, error: 'Database query failed while checking tickets table.' };
       }
 
-      return { connected: true, count: count ?? 0 };
+      const { error: ticketColsErr } = await client
+        .from('tickets')
+        .select('id, order_ref, reserved_until, relworx_internal_ref')
+        .limit(1);
+
+      const { error: ordersErr } = await client
+        .from('orders')
+        .select('id, order_ref, status')
+        .limit(1);
+
+      const ticketsSchemaReady = !ticketColsErr;
+      const ordersTableReady = !ordersErr;
+      const warnings: string[] = [];
+
+      if (!ticketsSchemaReady) {
+        warnings.push("public.tickets is missing reservation columns (order_ref, reserved_until, relworx_internal_ref) or PostgREST schema cache needs reload.");
+      }
+      if (!ordersTableReady) {
+        warnings.push('public.orders table is not created yet (falling back to public.tickets reservation tracking).');
+      }
+
+      return {
+        connected: true,
+        count: count ?? 0,
+        ticketsSchemaReady,
+        ordersTableReady,
+        schemaWarning: warnings.length > 0 ? warnings.join(' ') : undefined,
+      };
     } catch {
       return { connected: false, count: 0, error: 'Connection to Supabase failed.' };
     }
@@ -403,12 +478,19 @@ export const SupabaseServerService = {
         }
         reservedViaRpc = true;
       } else if (rpcErr && !isMissingRpcError(rpcErr)) {
-        console.error('[Supabase reserve_tickets_atomic Error]', rpcErr.code, rpcErr.message);
-        return {
-          success: false,
-          message: 'Could not reserve tickets in the database. Please ensure the orders schema migration has been applied.',
-          error: 'DATABASE_ERROR',
-        };
+        // If public.orders doesn't exist yet inside the RPC, fall through to reserveTicketsDirect
+        if (!isMissingRelationError(rpcErr, 'orders')) {
+          console.error('[Supabase reserve_tickets_atomic Error]', rpcErr.code, rpcErr.message);
+          const classified = classifySchemaError(
+            rpcErr,
+            'Could not reserve tickets in the database. Please ensure the latest Supabase schema migration has been applied.'
+          );
+          return {
+            success: false,
+            message: classified.message,
+            error: classified.error,
+          };
+        }
       }
     } catch (rpcException: any) {
       console.warn('[Supabase RPC Exception, falling back to direct reservation]', rpcException?.message);
@@ -553,10 +635,14 @@ export const SupabaseServerService = {
 
       if (lockErr) {
         console.error('[Supabase reserveTicketsDirect lockErr]', lockErr.code, lockErr.message);
+        const classified = classifySchemaError(
+          lockErr,
+          'Could not lock ticket reservation in database. Ensure order_ref and reserved_until exist on public.tickets.'
+        );
         return {
           success: false,
-          message: 'Could not lock ticket reservation in database. Ensure latest database migration is applied.',
-          error: 'DATABASE_ERROR',
+          message: classified.message,
+          error: classified.error,
         };
       }
 
@@ -585,13 +671,24 @@ export const SupabaseServerService = {
       });
 
       if (orderErr) {
-        console.error('[Supabase orders insert error]', orderErr.code, orderErr.message);
-        await this.releaseReservationByOrderRef(orderRef);
-        return {
-          success: false,
-          message: 'Could not create order record in database. Ensure the public.orders migration has been applied.',
-          error: 'DATABASE_ERROR',
-        };
+        if (isMissingRelationError(orderErr, 'orders')) {
+          // Safe fallback: public.tickets already holds the 10-minute reservation, order_ref, and buyer details
+          console.warn(
+            `[Supabase] public.orders table not found (${orderErr.code}); tracking reservation ${orderRef} via public.tickets.`
+          );
+        } else {
+          console.error('[Supabase orders insert error]', orderErr.code, orderErr.message);
+          await this.releaseReservationByOrderRef(orderRef);
+          const classified = classifySchemaError(
+            orderErr,
+            'Could not create order record in database. Ensure the public.orders schema is up to date.'
+          );
+          return {
+            success: false,
+            message: classified.message,
+            error: classified.error,
+          };
+        }
       }
 
       return { success: true, message: 'Tickets reserved.' };
@@ -670,13 +767,43 @@ export const SupabaseServerService = {
     }
 
     try {
-      const { data: order, error: orderErr } = await client
+      let order: any = null;
+      const { data: orderData, error: orderErr } = await client
         .from('orders')
         .select('*')
         .eq('order_ref', orderRef)
         .maybeSingle();
 
-      if (orderErr || !order) {
+      if (!orderErr && orderData) {
+        order = orderData;
+      } else if (!orderData || isMissingRelationError(orderErr, 'orders')) {
+        // Fallback: synthesize order state from reserved/issued rows in public.tickets when public.orders is absent
+        const { data: orderTickets, error: ticketsFallbackErr } = await client
+          .from('tickets')
+          .select('*')
+          .eq('order_ref', orderRef);
+
+        if (!ticketsFallbackErr && orderTickets && orderTickets.length > 0) {
+          const rows = orderTickets as TicketRow[];
+          const allPaid = rows.every(
+            (t) => t.status === 'issued' && (t.payment_status === 'paid' || t.payment_status === 'manual_paid')
+          );
+          const first = rows[0];
+          order = {
+            order_ref: orderRef,
+            status: allPaid ? 'paid' : 'pending',
+            buyer_name: first.buyer_name || 'Guest',
+            category: first.category,
+            quantity: rows.length,
+            total_amount_ugx: rows.reduce((sum, t) => sum + Number(t.price_ugx || 0), 0),
+            reserved_until: first.reserved_until || new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            relworx_internal_ref: first.relworx_internal_ref || null,
+            _issuedTickets: allPaid ? rows : undefined,
+          };
+        }
+      }
+
+      if (!order) {
         return {
           success: false,
           orderRef,
@@ -686,11 +813,15 @@ export const SupabaseServerService = {
       }
 
       if (order.status === 'paid') {
-        const { data: tickets } = await client
-          .from('tickets')
-          .select('*')
-          .eq('order_ref', orderRef)
-          .eq('status', 'issued');
+        const tickets =
+          order._issuedTickets ||
+          (
+            await client
+              .from('tickets')
+              .select('*')
+              .eq('order_ref', orderRef)
+              .eq('status', 'issued')
+          ).data;
 
         return {
           success: true,
@@ -705,7 +836,7 @@ export const SupabaseServerService = {
       }
 
       const now = Date.now();
-      const expiry = new Date(order.reserved_until).getTime();
+      const expiry = order.reserved_until ? new Date(order.reserved_until).getTime() : now + 600000;
       if (order.status === 'pending' && now > expiry) {
         await this.releaseReservationByOrderRef(orderRef);
         return {
@@ -856,11 +987,31 @@ export const SupabaseServerService = {
       return { success: false, message: configError || 'Supabase database is not connected.' };
     }
 
-    const { data: order } = await client
+    let order: { relworx_internal_ref?: string | null; status?: string } | null = null;
+    const { data: orderRow, error: orderErr } = await client
       .from('orders')
       .select('relworx_internal_ref, status')
       .eq('order_ref', orderRef)
       .maybeSingle();
+
+    if (!orderErr && orderRow) {
+      order = orderRow;
+    } else if (!orderRow || isMissingRelationError(orderErr, 'orders')) {
+      const { data: ticketRows } = await client
+        .from('tickets')
+        .select('relworx_internal_ref, status, payment_status')
+        .eq('order_ref', orderRef);
+
+      if (ticketRows && ticketRows.length > 0) {
+        const allPaid = ticketRows.every(
+          (t) => t.status === 'issued' && (t.payment_status === 'paid' || t.payment_status === 'manual_paid')
+        );
+        order = {
+          relworx_internal_ref: ticketRows[0].relworx_internal_ref,
+          status: allPaid ? 'paid' : 'pending',
+        };
+      }
+    }
 
     if (!order) {
       return { success: false, message: 'Order reference not found in database.' };
@@ -1057,6 +1208,9 @@ export const SupabaseServerService = {
         .order('created_at', { ascending: false });
 
       if (error) {
+        if (isMissingRelationError(error, 'orders')) {
+          return { success: true, orders: [] };
+        }
         return { success: false, orders: [], error: 'Unable to fetch orders from database.' };
       }
 

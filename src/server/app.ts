@@ -153,7 +153,12 @@ export function createExpressApp() {
         if (errCode === 'INSUFFICIENT_INVENTORY') {
           return res.status(409).json(result);
         }
-        if (errCode === 'SUPABASE_NOT_CONFIGURED' || errCode === 'RELWORX_NOT_CONFIGURED' || errCode === 'DATABASE_ERROR') {
+        if (
+          errCode === 'SUPABASE_NOT_CONFIGURED' ||
+          errCode === 'RELWORX_NOT_CONFIGURED' ||
+          errCode === 'DATABASE_ERROR' ||
+          errCode === 'SCHEMA_MISMATCH'
+        ) {
           return res.status(503).json(result);
         }
         return res.status(502).json(result);
@@ -302,6 +307,9 @@ export function createExpressApp() {
       project: 'Poolparty',
       table: 'public.tickets',
       totalRecordsFound: health.count,
+      ticketsSchemaReady: health.ticketsSchemaReady,
+      ordersTableReady: health.ordersTableReady,
+      schemaWarning: health.schemaWarning,
       relworxConfigured: RelworxService.isConfigured(),
       relworxAccount: RelworxService.getAccountNo() ? 'Configured' : 'Missing',
       error: health.error,

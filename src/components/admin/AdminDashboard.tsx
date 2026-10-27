@@ -228,40 +228,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
-  const exactUserSql = `-- POOL PARTY: initial inventory of 70 tickets
+  const exactUserSql = `-- POOL PARTY: Non-destructive Supabase setup & schema sync (70 passes)
 create extension if not exists pgcrypto;
 
-create table public.tickets (
+create table if not exists public.tickets (
   id uuid primary key default gen_random_uuid(),
-
   ticket_number text unique not null,
-  category text not null
-    check (category in ('VIP', 'ORDINARY')),
-
-  price_ugx integer not null
-    check (price_ugx > 0),
-
+  category text not null check (category in ('VIP', 'ORDINARY')),
+  price_ugx integer not null check (price_ugx > 0),
   status text not null default 'available'
-    check (status in (
-      'available', 'reserved', 'issued', 'cancelled'
-    )),
-
+    check (status in ('available', 'reserved', 'issued', 'cancelled')),
   payment_status text not null default 'unpaid'
-    check (payment_status in (
-      'unpaid', 'pending', 'paid',
-      'failed', 'refunded', 'manual_paid'
-    )),
-
+    check (payment_status in ('unpaid', 'pending', 'paid', 'failed', 'refunded', 'manual_paid')),
   buyer_name text,
   buyer_email text,
   buyer_phone text,
-
   qr_token uuid not null unique default gen_random_uuid(),
-
   created_at timestamptz not null default now(),
   paid_at timestamptz,
   checked_in_at timestamptz,
-
+  order_ref text,
+  reserved_until timestamptz,
+  relworx_internal_ref text,
   constraint ticket_number_category_check check (
     (category = 'VIP' and ticket_number like 'VIP-%')
     or
@@ -269,34 +257,53 @@ create table public.tickets (
   )
 );
 
--- Keep ticket records inaccessible to public API roles.
+-- Non-destructively add reservation & Relworx columns if upgrading an existing table
+alter table public.tickets
+  add column if not exists order_ref text,
+  add column if not exists reserved_until timestamptz,
+  add column if not exists relworx_internal_ref text;
+
+create index if not exists idx_tickets_order_ref on public.tickets(order_ref);
+create index if not exists idx_tickets_reserved_until on public.tickets(reserved_until);
+
+-- Create public.orders table if missing
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  order_ref text unique not null,
+  category text not null check (category in ('VIP', 'ORDINARY')),
+  quantity integer not null check (quantity > 0 and quantity <= 10),
+  unit_price_ugx integer not null check (unit_price_ugx > 0),
+  total_amount_ugx integer not null check (total_amount_ugx > 0),
+  status text not null default 'pending'
+    check (status in ('pending', 'paid', 'failed', 'cancelled', 'expired')),
+  payment_method text not null default 'relworx_mobile_money',
+  network text check (network in ('MTN', 'AIRTEL')),
+  buyer_name text not null,
+  buyer_email text not null,
+  buyer_phone text not null,
+  relworx_internal_ref text,
+  gateway text not null default 'relworx',
+  reserved_until timestamptz not null default (now() + interval '10 minutes'),
+  created_at timestamptz not null default now(),
+  paid_at timestamptz
+);
+
 alter table public.tickets enable row level security;
+alter table public.orders enable row level security;
 
--- Create exactly 20 VIP tickets.
+-- Seed 20 VIP & 50 Ordinary passes without overwriting existing records
 insert into public.tickets (ticket_number, category, price_ugx)
-select
-  'VIP-' || lpad(n::text, 3, '0'),
-  'VIP',
-  50000
-from generate_series(1, 20) as n;
+select 'VIP-' || lpad(n::text, 3, '0'), 'VIP', 50000
+from generate_series(1, 20) as n
+on conflict (ticket_number) do nothing;
 
--- Create exactly 50 Ordinary tickets.
 insert into public.tickets (ticket_number, category, price_ugx)
-select
-  'ORD-' || lpad(n::text, 3, '0'),
-  'ORDINARY',
-  20000
-from generate_series(1, 50) as n;
+select 'ORD-' || lpad(n::text, 3, '0'), 'ORDINARY', 20000
+from generate_series(1, 50) as n
+on conflict (ticket_number) do nothing;
 
-select
-  category,
-  count(*) as total_tickets,
-  count(*) filter (
-    where status = 'available'
-  ) as available
-from public.tickets
-group by category
-order by category;`;
+-- Refresh PostgREST schema cache immediately
+notify pgrst, 'reload schema';`;
 
   const copySql = () => {
     navigator.clipboard.writeText(exactUserSql);

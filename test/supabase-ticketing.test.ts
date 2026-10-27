@@ -401,4 +401,40 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       await stopServer();
     }
   });
+
+  it('10. Schema Mismatch / Stale PostgREST Cache Returns Actionable HTTP 503 Without Leaking Secrets', async () => {
+    await startServer();
+
+    const schemaErrMock = mock.method(SupabaseServerService, 'initiateRelworxPayment', async () => ({
+      success: false,
+      message:
+        'Database schema update or cache reload required on public.tickets (missing order_ref, reserved_until, or relworx_internal_ref, or PostgREST schema cache not refreshed).',
+      error: 'SCHEMA_MISMATCH',
+    }));
+
+    try {
+      const res = await fetch(`${baseUrl}/api/payments/relworx-initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'ORDINARY',
+          quantity: 1,
+          buyerName: 'Schema Test Guest',
+          buyerEmail: 'schema@example.ug',
+          buyerPhone: '0775198484',
+          network: 'MTN',
+        }),
+      });
+
+      assert.strictEqual(res.status, 503, 'SCHEMA_MISMATCH must return HTTP 503');
+      const body = await res.json();
+      assert.strictEqual(body.success, false);
+      assert.strictEqual(body.error, 'SCHEMA_MISMATCH');
+      assert.ok(body.message.includes('order_ref'));
+    } finally {
+      schemaErrMock.mock.restore();
+      await stopServer();
+    }
+  });
 });
+

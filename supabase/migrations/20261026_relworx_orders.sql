@@ -99,3 +99,6 @@ begin
   return released_count;
 end;
 $$;
+
+-- 6. Reload PostgREST schema cache immediately
+notify pgrst, 'reload schema';
