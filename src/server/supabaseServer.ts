@@ -1,34 +1,88 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { RelworxService } from './relworxService.ts';
-import type { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order.ts';
+import { RelworxService } from './relworxService.js';
+import type { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order.js';
 
 dotenv.config();
 
-// Server-side environment variables (kept strictly off the client)
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+function sanitizeEnv(val: string | undefined): string | undefined {
+  if (!val) return undefined;
+  const cleaned = val.trim().replace(/^["']|["']$/g, '').trim();
+  return cleaned.length > 0 ? cleaned : undefined;
+}
 
-export const isLiveSupabaseAvailable = Boolean(
-  supabaseUrl &&
-  supabaseServiceRoleKey &&
-  !supabaseUrl.includes('your-project') &&
-  !supabaseUrl.includes('placeholder') &&
-  !supabaseUrl.includes('example') &&
-  supabaseUrl.startsWith('https://') &&
-  supabaseServiceRoleKey.length > 20 &&
-  !supabaseServiceRoleKey.includes('your-supabase-service-role-key')
-);
+function getSupabaseEnv() {
+  const url = sanitizeEnv(
+    process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
+  );
+  const serviceKey = sanitizeEnv(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  return { url, serviceKey };
+}
 
-// Create Supabase Admin client with service-role key (Bypasses RLS safely on server only)
-export const supabaseAdmin: SupabaseClient | null = isLiveSupabaseAvailable
-  ? createClient(supabaseUrl!, supabaseServiceRoleKey!, {
+function detectJwtRole(token: string | undefined): string | null {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const json = Buffer.from(parts[1], 'base64url').toString('utf-8');
+    const payload = JSON.parse(json);
+    return typeof payload?.role === 'string' ? payload.role : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSupabaseEnvValid(url?: string, serviceKey?: string): boolean {
+  return Boolean(
+    url &&
+      serviceKey &&
+      !url.includes('your-project') &&
+      !url.includes('placeholder') &&
+      !url.includes('example') &&
+      url.startsWith('https://') &&
+      serviceKey.length > 20 &&
+      !serviceKey.includes('your-supabase-service-role-key')
+  );
+}
+
+let _cachedClient: SupabaseClient | null = null;
+let _cachedKeySig = '';
+
+function getSupabaseClient(): { client: SupabaseClient | null; configError?: string } {
+  const { url, serviceKey } = getSupabaseEnv();
+
+  if (!isSupabaseEnvValid(url, serviceKey)) {
+    return {
+      client: null,
+      configError: 'Ticketing database is not configured on the server. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.',
+    };
+  }
+
+  const jwtRole = detectJwtRole(serviceKey);
+  if (jwtRole === 'anon') {
+    return {
+      client: null,
+      configError: 'Server database configuration error: SUPABASE_SERVICE_ROLE_KEY is set to an anon key instead of the service_role key.',
+    };
+  }
+
+  const sig = `${url}|${serviceKey}`;
+  if (!_cachedClient || _cachedKeySig !== sig) {
+    _cachedClient = createClient(url!, serviceKey!, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
       },
-    })
-  : null;
+    });
+    _cachedKeySig = sig;
+  }
+
+  return { client: _cachedClient };
+}
+
+const initialEnv = getSupabaseEnv();
+export const isLiveSupabaseAvailable = isSupabaseEnvValid(initialEnv.url, initialEnv.serviceKey);
+export const supabaseAdmin: SupabaseClient | null = getSupabaseClient().client;
 
 export interface PublicInventoryCounts {
   VIP: {
@@ -67,31 +121,43 @@ export interface TicketRow {
 
 export type OrderRow = OrderRecord;
 
+function isMissingRpcError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    code === 'PGRST202' ||
+    code === '42883' ||
+    msg.includes('could not find the function') ||
+    msg.includes('does not exist')
+  );
+}
+
 export const SupabaseServerService = {
   /**
    * Health Check: Test connection to live Supabase project
    */
   async checkConnection(): Promise<{ connected: boolean; count: number; error?: string }> {
-    if (!supabaseAdmin) {
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
       return {
         connected: false,
         count: 0,
-        error: 'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured with valid Supabase project credentials in environment.',
+        error: configError || 'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured.',
       };
     }
 
     try {
-      const { count, error } = await supabaseAdmin
+      const { count, error } = await client
         .from('tickets')
         .select('*', { count: 'exact', head: true });
 
       if (error) {
-        return { connected: false, count: 0, error: error.message };
+        return { connected: false, count: 0, error: 'Database query failed while checking tickets table.' };
       }
 
       return { connected: true, count: count ?? 0 };
-    } catch (err: any) {
-      return { connected: false, count: 0, error: err?.message || 'Connection to Supabase failed.' };
+    } catch {
+      return { connected: false, count: 0, error: 'Connection to Supabase failed.' };
     }
   },
 
@@ -100,13 +166,14 @@ export const SupabaseServerService = {
    * Ensures capacity returns to 'available' automatically if customer doesn't pay
    */
   async releaseExpiredReservations(): Promise<number> {
-    if (!supabaseAdmin) {
+    const { client } = getSupabaseClient();
+    if (!client) {
       return 0;
     }
 
     // Try PostgreSQL stored procedure first
     try {
-      const { data: rpcCount, error: rpcErr } = await supabaseAdmin.rpc('release_expired_ticket_reservations');
+      const { data: rpcCount, error: rpcErr } = await client.rpc('release_expired_ticket_reservations');
       if (!rpcErr && typeof rpcCount === 'number') {
         return rpcCount;
       }
@@ -117,8 +184,7 @@ export const SupabaseServerService = {
     const nowIso = new Date().toISOString();
 
     try {
-      // Update tickets whose reservation period has expired
-      const { data: expiredTickets, error: tErr } = await supabaseAdmin
+      const { data: expiredTickets, error: tErr } = await client
         .from('tickets')
         .update({
           status: 'available',
@@ -136,8 +202,7 @@ export const SupabaseServerService = {
         .select('id');
 
       if (!tErr && expiredTickets && expiredTickets.length > 0) {
-        // Update corresponding orders to expired
-        await supabaseAdmin
+        await client
           .from('orders')
           .update({ status: 'expired' })
           .eq('status', 'pending')
@@ -158,27 +223,31 @@ export const SupabaseServerService = {
    * Never exposes buyer details, personal phone numbers, or QR tokens.
    */
   async getPublicCounts(): Promise<{ success: boolean; counts?: PublicInventoryCounts; error?: string }> {
-    if (!supabaseAdmin) {
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
       return {
         success: false,
-        error: 'Database connection offline. SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are not configured.',
+        error: configError || 'Ticketing database is currently offline.',
       };
     }
 
-    // Release any expired reservations first
     await this.releaseExpiredReservations();
 
     try {
-      const { data, error } = await supabaseAdmin
+      const { data, error } = await client
         .from('tickets')
         .select('category, status');
 
       if (error) {
-        return { success: false, error: error.message };
+        console.error('[Supabase getPublicCounts Error]', error.code, error.message);
+        return { success: false, error: 'Unable to load live ticket inventory at this time.' };
       }
 
-      if (!data) {
-        return { success: false, error: 'No ticket data returned from database.' };
+      if (!data || data.length === 0) {
+        return {
+          success: false,
+          error: 'Ticket inventory has not been initialized or is inaccessible. Verify database setup and service role key.',
+        };
       }
 
       const vipTotal = data.filter((t) => t.category === 'VIP').length;
@@ -190,14 +259,15 @@ export const SupabaseServerService = {
       return {
         success: true,
         counts: {
-          VIP: { total: vipTotal || 20, available: vipAvail, priceUgx: 50000 },
-          ORDINARY: { total: ordTotal || 50, available: ordAvail, priceUgx: 20000 },
+          VIP: { total: vipTotal, available: vipAvail, priceUgx: 50000 },
+          ORDINARY: { total: ordTotal, available: ordAvail, priceUgx: 20000 },
           totalAvailable: vipAvail + ordAvail,
           isLiveSupabase: true,
         },
       };
     } catch (err: any) {
-      return { success: false, error: err?.message || 'Database query error' };
+      console.error('[Supabase getPublicCounts Exception]', err?.message || err);
+      return { success: false, error: 'Unable to reach the ticketing database.' };
     }
   },
 
@@ -226,26 +296,77 @@ export const SupabaseServerService = {
   }> {
     const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = params;
 
-    // Validate quantities strictly
     if (!quantity || quantity < 1 || quantity > 10) {
-      return { success: false, message: 'Invalid ticket quantity (minimum 1, maximum 10).' };
+      return {
+        success: false,
+        message: 'Invalid ticket quantity (minimum 1, maximum 10).',
+        error: 'VALIDATION_ERROR',
+      };
     }
 
     if (category !== 'VIP' && category !== 'ORDINARY') {
-      return { success: false, message: 'Invalid ticket category. Must be VIP or ORDINARY.' };
+      return {
+        success: false,
+        message: 'Invalid ticket category. Must be VIP or ORDINARY.',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    if (network !== 'MTN' && network !== 'AIRTEL') {
+      return {
+        success: false,
+        message: 'Invalid mobile money network. Must be MTN or AIRTEL.',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    if (!buyerName || buyerName.trim().length < 2) {
+      return {
+        success: false,
+        message: 'Please provide the attendee full name.',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!buyerEmail || !emailRegex.test(buyerEmail.trim())) {
+      return {
+        success: false,
+        message: 'Please provide a valid email address.',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    const phoneCheck = RelworxService.formatUgandaMsisdn(buyerPhone);
+    if (!phoneCheck.valid) {
+      return {
+        success: false,
+        message: 'Please enter a valid Uganda Mobile Money phone number (e.g. 0775 198 484).',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    // Check database and payment gateway configuration BEFORE locking inventory
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        message: configError || 'Ticketing database is currently unavailable. Please try again later.',
+        error: 'SUPABASE_NOT_CONFIGURED',
+      };
+    }
+
+    if (!RelworxService.isConfigured()) {
+      return {
+        success: false,
+        message: 'Mobile Money payment gateway is not configured yet. Please contact the event organizer.',
+        error: 'RELWORX_NOT_CONFIGURED',
+      };
     }
 
     // Trusted prices enforced strictly on server — never trust client submission
     const unitPrice = category === 'VIP' ? 50000 : 20000;
     const totalAmount = unitPrice * quantity;
-
-    if (!supabaseAdmin) {
-      return {
-        success: false,
-        message: 'Cannot process order: Database is not connected. Please configure Supabase credentials.',
-        error: 'SUPABASE_NOT_CONFIGURED',
-      };
-    }
 
     // Release any stale expired reservations first
     await this.releaseExpiredReservations();
@@ -254,11 +375,12 @@ export const SupabaseServerService = {
     const timestamp = Date.now();
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const orderRef = `PP-RWX-${timestamp}-${randomSuffix}`;
-    const reservedUntil = new Date(timestamp + 10 * 60 * 1000).toISOString(); // 10 minutes
+    const reservedUntil = new Date(timestamp + 10 * 60 * 1000).toISOString();
 
-    // 1. Try atomic PostgreSQL RPC if provisioned
+    // 1. Reserve tickets & create pending order atomically (never paid before verification)
+    let reservedViaRpc = false;
     try {
-      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('reserve_tickets_atomic', {
+      const { data: rpcRes, error: rpcErr } = await client.rpc('reserve_tickets_atomic', {
         p_category: category,
         p_quantity: quantity,
         p_buyer_name: buyerName.trim(),
@@ -275,20 +397,41 @@ export const SupabaseServerService = {
         if (!rpcRes.success) {
           return {
             success: false,
-            message: rpcRes.message || 'Insufficient inventory.',
+            message: rpcRes.message || `Insufficient ${category} tickets available.`,
+            error: 'INSUFFICIENT_INVENTORY',
           };
         }
-      } else {
-        // Fallback to direct atomic table updates in Supabase
-        await this.reserveTicketsDirect(category, quantity, buyerName, buyerEmail, buyerPhone, orderRef, reservedUntil, network, unitPrice, totalAmount);
-      }
-    } catch (err: any) {
-      try {
-        await this.reserveTicketsDirect(category, quantity, buyerName, buyerEmail, buyerPhone, orderRef, reservedUntil, network, unitPrice, totalAmount);
-      } catch (directErr: any) {
+        reservedViaRpc = true;
+      } else if (rpcErr && !isMissingRpcError(rpcErr)) {
+        console.error('[Supabase reserve_tickets_atomic Error]', rpcErr.code, rpcErr.message);
         return {
           success: false,
-          message: directErr?.message || 'Database error reserving tickets.',
+          message: 'Could not reserve tickets in the database. Please ensure the orders schema migration has been applied.',
+          error: 'DATABASE_ERROR',
+        };
+      }
+    } catch (rpcException: any) {
+      console.warn('[Supabase RPC Exception, falling back to direct reservation]', rpcException?.message);
+    }
+
+    if (!reservedViaRpc) {
+      const directResult = await this.reserveTicketsDirect(
+        category,
+        quantity,
+        buyerName,
+        buyerEmail,
+        buyerPhone,
+        orderRef,
+        reservedUntil,
+        network,
+        unitPrice,
+        totalAmount
+      );
+      if (!directResult.success) {
+        return {
+          success: false,
+          message: directResult.message,
+          error: directResult.error || 'DATABASE_ERROR',
         };
       }
     }
@@ -304,11 +447,11 @@ export const SupabaseServerService = {
     });
 
     if (!relworxRes.success) {
-      // Immediately release reservation if Relworx rejected (e.g. API disabled or network error)
+      // Immediately release reservation if Relworx rejected or timed out
       await this.releaseReservationByOrderRef(orderRef);
       return {
         success: false,
-        message: relworxRes.message || 'Relworx could not initiate payment on this phone number.',
+        message: relworxRes.message || 'Mobile Money gateway could not initiate payment on this phone number.',
         error: relworxRes.error || 'RELWORX_REQUEST_FAILED',
       };
     }
@@ -316,12 +459,12 @@ export const SupabaseServerService = {
     const internalRef = relworxRes.internal_reference || null;
     if (internalRef) {
       try {
-        await supabaseAdmin
+        await client
           .from('orders')
           .update({ relworx_internal_ref: internalRef })
           .eq('order_ref', orderRef);
 
-        await supabaseAdmin
+        await client
           .from('tickets')
           .update({ relworx_internal_ref: internalRef })
           .eq('order_ref', orderRef);
@@ -342,7 +485,7 @@ export const SupabaseServerService = {
   },
 
   /**
-   * Direct atomic reservation against Supabase tables
+   * Direct reservation against Supabase tables with strict rollback on partial/order failure
    */
   async reserveTicketsDirect(
     category: 'VIP' | 'ORDINARY',
@@ -355,61 +498,111 @@ export const SupabaseServerService = {
     network: PaymentNetwork,
     unitPrice: number,
     totalAmount: number
-  ): Promise<void> {
-    if (!supabaseAdmin) throw new Error('Supabase client not initialized');
-
-    // Fetch available candidate tickets
-    const { data: available, error: fetchErr } = await supabaseAdmin
-      .from('tickets')
-      .select('id, ticket_number')
-      .eq('category', category)
-      .eq('status', 'available')
-      .order('ticket_number', { ascending: true })
-      .limit(quantity);
-
-    if (fetchErr) throw fetchErr;
-
-    if (!available || available.length < quantity) {
-      throw new Error(`Insufficient inventory! Only ${available?.length || 0} ${category} ticket(s) currently available.`);
+  ): Promise<{ success: boolean; message: string; error?: string }> {
+    const { client } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        message: 'Ticketing database is not connected.',
+        error: 'SUPABASE_NOT_CONFIGURED',
+      };
     }
 
-    const allocatedTicketIds = available.map((t) => t.id);
+    try {
+      const { data: available, error: fetchErr } = await client
+        .from('tickets')
+        .select('id, ticket_number')
+        .eq('category', category)
+        .eq('status', 'available')
+        .order('ticket_number', { ascending: true })
+        .limit(quantity);
 
-    // Lock candidate tickets with reservation
-    const { error: lockErr } = await supabaseAdmin
-      .from('tickets')
-      .update({
-        status: 'reserved',
-        payment_status: 'pending',
+      if (fetchErr) {
+        console.error('[Supabase reserveTicketsDirect fetchErr]', fetchErr.code, fetchErr.message);
+        return {
+          success: false,
+          message: 'Unable to read available ticket inventory.',
+          error: 'DATABASE_ERROR',
+        };
+      }
+
+      if (!available || available.length < quantity) {
+        return {
+          success: false,
+          message: `Insufficient tickets available. Only ${available?.length || 0} ${category} pass(es) currently remaining.`,
+          error: 'INSUFFICIENT_INVENTORY',
+        };
+      }
+
+      const allocatedTicketIds = available.map((t) => t.id);
+
+      const { data: lockedRows, error: lockErr } = await client
+        .from('tickets')
+        .update({
+          status: 'reserved',
+          payment_status: 'pending',
+          buyer_name: buyerName.trim(),
+          buyer_email: buyerEmail.trim(),
+          buyer_phone: buyerPhone.trim(),
+          order_ref: orderRef,
+          reserved_until: reservedUntil,
+        })
+        .in('id', allocatedTicketIds)
+        .eq('status', 'available')
+        .select('id');
+
+      if (lockErr) {
+        console.error('[Supabase reserveTicketsDirect lockErr]', lockErr.code, lockErr.message);
+        return {
+          success: false,
+          message: 'Could not lock ticket reservation in database. Ensure latest database migration is applied.',
+          error: 'DATABASE_ERROR',
+        };
+      }
+
+      if (!lockedRows || lockedRows.length < quantity) {
+        await this.releaseReservationByOrderRef(orderRef);
+        return {
+          success: false,
+          message: 'Those passes were just claimed by another guest. Please try again.',
+          error: 'INSUFFICIENT_INVENTORY',
+        };
+      }
+
+      const { error: orderErr } = await client.from('orders').insert({
+        order_ref: orderRef,
+        category,
+        quantity,
+        unit_price_ugx: unitPrice,
+        total_amount_ugx: totalAmount,
+        status: 'pending',
+        payment_method: 'relworx_mobile_money',
+        network,
         buyer_name: buyerName.trim(),
         buyer_email: buyerEmail.trim(),
         buyer_phone: buyerPhone.trim(),
-        order_ref: orderRef,
         reserved_until: reservedUntil,
-      })
-      .in('id', allocatedTicketIds)
-      .eq('status', 'available'); // Atomic concurrency guard
+      });
 
-    if (lockErr) throw lockErr;
+      if (orderErr) {
+        console.error('[Supabase orders insert error]', orderErr.code, orderErr.message);
+        await this.releaseReservationByOrderRef(orderRef);
+        return {
+          success: false,
+          message: 'Could not create order record in database. Ensure the public.orders migration has been applied.',
+          error: 'DATABASE_ERROR',
+        };
+      }
 
-    // Create order record in public.orders
-    const { error: orderErr } = await supabaseAdmin.from('orders').insert({
-      order_ref: orderRef,
-      category,
-      quantity,
-      unit_price_ugx: unitPrice,
-      total_amount_ugx: totalAmount,
-      status: 'pending',
-      payment_method: 'relworx_mobile_money',
-      network,
-      buyer_name: buyerName.trim(),
-      buyer_email: buyerEmail.trim(),
-      buyer_phone: buyerPhone.trim(),
-      reserved_until: reservedUntil,
-    });
-
-    if (orderErr) {
-      console.warn('Orders table insert error:', orderErr);
+      return { success: true, message: 'Tickets reserved.' };
+    } catch (err: any) {
+      console.error('[Supabase reserveTicketsDirect Exception]', err?.message || err);
+      await this.releaseReservationByOrderRef(orderRef);
+      return {
+        success: false,
+        message: 'Unexpected database error while reserving tickets.',
+        error: 'DATABASE_ERROR',
+      };
     }
   },
 
@@ -417,10 +610,11 @@ export const SupabaseServerService = {
    * Release reservation when checkout is explicitly cancelled or declined
    */
   async releaseReservationByOrderRef(orderRef: string): Promise<boolean> {
-    if (!supabaseAdmin) return false;
+    const { client } = getSupabaseClient();
+    if (!client) return false;
 
     try {
-      await supabaseAdmin
+      await client
         .from('tickets')
         .update({
           status: 'available',
@@ -435,7 +629,7 @@ export const SupabaseServerService = {
         .eq('order_ref', orderRef)
         .eq('status', 'reserved');
 
-      await supabaseAdmin
+      await client
         .from('orders')
         .update({ status: 'cancelled' })
         .eq('order_ref', orderRef)
@@ -465,17 +659,18 @@ export const SupabaseServerService = {
     reservedUntil?: string;
     secondsRemaining?: number;
   }> {
-    if (!supabaseAdmin) {
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
       return {
         success: false,
         orderRef,
         status: 'failed',
-        message: 'Database offline. SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing.',
+        message: configError || 'Ticketing database is currently offline.',
       };
     }
 
     try {
-      const { data: order, error: orderErr } = await supabaseAdmin
+      const { data: order, error: orderErr } = await client
         .from('orders')
         .select('*')
         .eq('order_ref', orderRef)
@@ -486,13 +681,12 @@ export const SupabaseServerService = {
           success: false,
           orderRef,
           status: 'failed',
-          message: 'Order reference not found in database.',
+          message: 'Order reference not found.',
         };
       }
 
-      // If order is confirmed paid, retrieve and return the issued tickets
       if (order.status === 'paid') {
-        const { data: tickets } = await supabaseAdmin
+        const { data: tickets } = await client
           .from('tickets')
           .select('*')
           .eq('order_ref', orderRef)
@@ -510,7 +704,6 @@ export const SupabaseServerService = {
         };
       }
 
-      // Check if 10-minute reservation has expired
       const now = Date.now();
       const expiry = new Date(order.reserved_until).getTime();
       if (order.status === 'pending' && now > expiry) {
@@ -523,7 +716,6 @@ export const SupabaseServerService = {
         };
       }
 
-      // Check Relworx status if live API is configured and order is pending
       if (order.status === 'pending' && RelworxService.isConfigured()) {
         try {
           const relCheck = await RelworxService.checkRequestStatus({
@@ -532,7 +724,6 @@ export const SupabaseServerService = {
           });
 
           if (relCheck.success && relCheck.status === 'success') {
-            // Confirmed payment on Relworx: Mark order as paid atomically in Supabase
             await this.markOrderAsPaid(orderRef, {
               relworx: relCheck,
               relworx_internal_ref: relCheck.internal_reference,
@@ -564,15 +755,14 @@ export const SupabaseServerService = {
         totalAmountUgx: order.total_amount_ugx,
         reservedUntil: order.reserved_until,
         secondsRemaining,
-        // Never return QR tokens for unpaid/pending orders
         tickets: [],
       };
-    } catch (err: any) {
+    } catch {
       return {
         success: false,
         orderRef,
         status: 'failed',
-        message: err?.message || 'Database error checking order status.',
+        message: 'Unable to check order status right now.',
       };
     }
   },
@@ -581,16 +771,20 @@ export const SupabaseServerService = {
    * Idempotently mark order and its reserved tickets as PAID and ISSUED in Supabase
    */
   async markOrderAsPaid(orderRef: string, paymentData?: any): Promise<boolean> {
-    if (!supabaseAdmin) return false;
+    const { client } = getSupabaseClient();
+    if (!client) return false;
 
     const flwTxId = paymentData?.id ? String(paymentData.id) : null;
-    const flwRef = paymentData?.flw_ref || paymentData?.relworx_internal_ref || paymentData?.relworx?.internal_reference || null;
+    const internalRef =
+      paymentData?.relworx_internal_ref ||
+      paymentData?.relworx?.internal_reference ||
+      paymentData?.flw_ref ||
+      null;
 
-    // 1. Try atomic PostgreSQL function
     try {
-      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('mark_order_paid_atomic', {
+      const { data: rpcRes, error: rpcErr } = await client.rpc('mark_order_paid_atomic', {
         p_order_ref: orderRef,
-        p_relworx_internal_ref: flwRef,
+        p_relworx_internal_ref: internalRef,
         p_flw_transaction_id: flwTxId,
       });
 
@@ -604,8 +798,7 @@ export const SupabaseServerService = {
     const now = new Date().toISOString();
 
     try {
-      // Check if already paid (idempotency check)
-      const { data: existingOrder } = await supabaseAdmin
+      const { data: existingOrder } = await client
         .from('orders')
         .select('status')
         .eq('order_ref', orderRef)
@@ -615,36 +808,36 @@ export const SupabaseServerService = {
         return true;
       }
 
-      // Update tickets to issued and paid
-      const { error: tErr } = await supabaseAdmin
+      const ticketUpdate: Record<string, any> = {
+        status: 'issued',
+        payment_status: 'paid',
+        paid_at: now,
+      };
+      if (internalRef) ticketUpdate.relworx_internal_ref = internalRef;
+
+      const { error: tErr } = await client
         .from('tickets')
-        .update({
-          status: 'issued',
-          payment_status: 'paid',
-          paid_at: now,
-          relworx_internal_ref: flwRef,
-          flw_transaction_id: flwTxId,
-        })
+        .update(ticketUpdate)
         .eq('order_ref', orderRef);
 
       if (tErr) {
-        console.error('Failed to mark tickets as paid in Supabase:', tErr);
+        console.error('Failed to mark tickets as paid in Supabase:', tErr.code, tErr.message);
+        return false;
       }
 
-      // Mark order as paid in orders table
-      const { error: oErr } = await supabaseAdmin
+      const orderUpdate: Record<string, any> = {
+        status: 'paid',
+        paid_at: now,
+      };
+      if (internalRef) orderUpdate.relworx_internal_ref = internalRef;
+
+      const { error: oErr } = await client
         .from('orders')
-        .update({
-          status: 'paid',
-          paid_at: now,
-          relworx_internal_ref: flwRef,
-          flw_transaction_id: flwTxId,
-          flw_ref: flwRef,
-        })
+        .update(orderUpdate)
         .eq('order_ref', orderRef);
 
       if (oErr) {
-        console.error('Failed to mark order as paid in Supabase:', oErr);
+        console.error('Failed to mark order as paid in Supabase:', oErr.code, oErr.message);
       }
 
       return true;
@@ -658,11 +851,12 @@ export const SupabaseServerService = {
    * Admin manual verification of an order with Relworx
    */
   async verifyRelworxOrderDirectly(orderRef: string): Promise<{ success: boolean; message: string }> {
-    if (!supabaseAdmin) {
-      return { success: false, message: 'Supabase database is not connected.' };
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, message: configError || 'Supabase database is not connected.' };
     }
 
-    const { data: order } = await supabaseAdmin
+    const { data: order } = await client
       .from('orders')
       .select('relworx_internal_ref, status')
       .eq('order_ref', orderRef)
@@ -697,14 +891,15 @@ export const SupabaseServerService = {
    * Strictly returns only ISSUED & PAID tickets from Supabase
    */
   async lookupTicketsByContact(contact: string): Promise<TicketRow[]> {
-    if (!supabaseAdmin) {
+    const { client } = getSupabaseClient();
+    if (!client) {
       return [];
     }
 
     const clean = contact.trim().replace(/[\s-]/g, '');
 
     try {
-      const { data, error } = await supabaseAdmin
+      const { data, error } = await client
         .from('tickets')
         .select('*')
         .or(`buyer_phone.ilike.%${clean}%,order_ref.eq.${clean}`)
@@ -730,7 +925,8 @@ export const SupabaseServerService = {
     ticket?: TicketRow;
     checkedInAt?: string;
   }> {
-    if (!supabaseAdmin) {
+    const { client } = getSupabaseClient();
+    if (!client) {
       return {
         status: 'INVALID',
         message: 'Database offline. Check-in system requires active Supabase connection.',
@@ -739,9 +935,8 @@ export const SupabaseServerService = {
 
     const clean = tokenOrNumber.trim();
 
-    // 1. Try atomic PostgreSQL RPC function
     try {
-      const { data: rpcRes, error: rpcErr } = await supabaseAdmin.rpc('gate_checkin_atomic', {
+      const { data: rpcRes, error: rpcErr } = await client.rpc('gate_checkin_atomic', {
         p_token_or_number: clean,
       });
 
@@ -753,7 +948,7 @@ export const SupabaseServerService = {
     }
 
     try {
-      const { data, error } = await supabaseAdmin
+      const { data, error } = await client
         .from('tickets')
         .select('*')
         .or(`qr_token.eq.${clean},ticket_number.eq.${clean}`)
@@ -793,9 +988,8 @@ export const SupabaseServerService = {
         };
       }
 
-      // Atomically set checked_in_at where it is still null
       const now = new Date().toISOString();
-      const { data: updated, error: updateErr } = await supabaseAdmin
+      const { data: updated, error: updateErr } = await client
         .from('tickets')
         .update({ checked_in_at: now })
         .eq('id', ticket.id)
@@ -817,10 +1011,10 @@ export const SupabaseServerService = {
         ticket: updated as TicketRow,
         checkedInAt: now,
       };
-    } catch (err: any) {
+    } catch {
       return {
         status: 'INVALID',
-        message: err?.message || 'Database error during check-in verification',
+        message: 'Unable to complete check-in verification right now.',
       };
     }
   },
@@ -829,44 +1023,46 @@ export const SupabaseServerService = {
    * Admin Operations (Secure Server-Side with Supabase)
    */
   async getAllTicketsAdmin(): Promise<{ success: boolean; tickets: TicketRow[]; error?: string }> {
-    if (!supabaseAdmin) {
-      return { success: false, tickets: [], error: 'Database not connected.' };
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, tickets: [], error: configError || 'Database not connected.' };
     }
 
     try {
-      const { data, error } = await supabaseAdmin
+      const { data, error } = await client
         .from('tickets')
         .select('*')
         .order('ticket_number', { ascending: true });
 
       if (error) {
-        return { success: false, tickets: [], error: error.message };
+        return { success: false, tickets: [], error: 'Unable to fetch tickets from database.' };
       }
 
       return { success: true, tickets: (data as TicketRow[]) || [] };
-    } catch (err: any) {
-      return { success: false, tickets: [], error: err?.message };
+    } catch {
+      return { success: false, tickets: [], error: 'Database query failed.' };
     }
   },
 
   async getAllOrdersAdmin(): Promise<{ success: boolean; orders: OrderRow[]; error?: string }> {
-    if (!supabaseAdmin) {
-      return { success: false, orders: [], error: 'Database not connected.' };
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, orders: [], error: configError || 'Database not connected.' };
     }
 
     try {
-      const { data, error } = await supabaseAdmin
+      const { data, error } = await client
         .from('orders')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (error) {
-        return { success: false, orders: [], error: error.message };
+        return { success: false, orders: [], error: 'Unable to fetch orders from database.' };
       }
 
       return { success: true, orders: (data as OrderRow[]) || [] };
-    } catch (err: any) {
-      return { success: false, orders: [], error: err?.message };
+    } catch {
+      return { success: false, orders: [], error: 'Database query failed.' };
     }
   },
 
@@ -879,15 +1075,15 @@ export const SupabaseServerService = {
   }): Promise<{ success: boolean; message: string; tickets?: TicketRow[] }> {
     const { category, quantity, buyerName, buyerEmail, buyerPhone } = params;
 
-    if (!supabaseAdmin) {
-      return { success: false, message: 'Database is offline. Connect Supabase to record sales.' };
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, message: configError || 'Database is offline. Connect Supabase to record sales.' };
     }
 
-    // Release expired before claiming inventory
     await this.releaseExpiredReservations();
 
     try {
-      const { data: available, error: fetchErr } = await supabaseAdmin
+      const { data: available, error: fetchErr } = await client
         .from('tickets')
         .select('*')
         .eq('category', category)
@@ -908,7 +1104,7 @@ export const SupabaseServerService = {
       const unitPrice = category === 'VIP' ? 50000 : 20000;
       const totalAmount = unitPrice * quantity;
 
-      const { data: updated, error: updateErr } = await supabaseAdmin
+      const { data: updated, error: updateErr } = await client
         .from('tickets')
         .update({
           status: 'issued',
@@ -920,12 +1116,14 @@ export const SupabaseServerService = {
           paid_at: now,
         })
         .in('id', idsToUpdate)
+        .eq('status', 'available')
         .select();
 
-      if (updateErr) throw updateErr;
+      if (updateErr || !updated || updated.length < quantity) {
+        return { success: false, message: 'Could not issue physical ticket(s) in database.' };
+      }
 
-      // Record box office order in public.orders
-      await supabaseAdmin.from('orders').insert({
+      await client.from('orders').insert({
         order_ref: orderRef,
         category,
         quantity,
@@ -944,23 +1142,24 @@ export const SupabaseServerService = {
         message: `Issued ${quantity} physical ${category} ticket(s).`,
         tickets: updated as TicketRow[],
       };
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Database error recording physical sale' };
+    } catch {
+      return { success: false, message: 'Database error recording physical sale.' };
     }
   },
 
   async confirmPaymentAdmin(ticketId: string): Promise<boolean> {
-    if (!supabaseAdmin) return false;
+    const { client } = getSupabaseClient();
+    if (!client) return false;
 
     const now = new Date().toISOString();
     try {
-      const { data: ticket } = await supabaseAdmin
+      const { data: ticket } = await client
         .from('tickets')
         .select('order_ref')
         .eq('id', ticketId)
         .single();
 
-      const { error } = await supabaseAdmin
+      const { error } = await client
         .from('tickets')
         .update({
           status: 'issued',
@@ -970,7 +1169,7 @@ export const SupabaseServerService = {
         .eq('id', ticketId);
 
       if (!error && ticket?.order_ref) {
-        await supabaseAdmin
+        await client
           .from('orders')
           .update({ status: 'paid', paid_at: now })
           .eq('order_ref', ticket.order_ref);
@@ -983,10 +1182,11 @@ export const SupabaseServerService = {
   },
 
   async releaseTicketAdmin(ticketId: string): Promise<boolean> {
-    if (!supabaseAdmin) return false;
+    const { client } = getSupabaseClient();
+    if (!client) return false;
 
     try {
-      const { error } = await supabaseAdmin
+      const { error } = await client
         .from('tickets')
         .update({
           status: 'available',

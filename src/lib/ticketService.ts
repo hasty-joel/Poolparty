@@ -2,6 +2,98 @@ import { TicketRecord, TicketCategory, InventoryDashboardStats, CheckInResult, P
 
 let _adminToken: string = '';
 
+const DEFAULT_API_TIMEOUT_MS = 12000;
+const PAYMENT_API_TIMEOUT_MS = 20000;
+
+interface SafeJsonResult<T = any> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+  fallbackMessage: string;
+}
+
+function getHttpFallbackMessage(status: number, isHtml: boolean): string {
+  if (status === 401 || status === 403) {
+    return 'Unauthorized request.';
+  }
+  if (status === 404 || isHtml) {
+    return 'Ticketing API endpoint could not be reached. Please refresh the page and try again.';
+  }
+  if (status === 409) {
+    return 'Requested passes are currently unavailable.';
+  }
+  if (status === 504) {
+    return 'The ticketing server timed out while processing your request. Please try again.';
+  }
+  if (status >= 500) {
+    return 'Ticketing service is temporarily unavailable. Please try again shortly.';
+  }
+  return 'Unable to complete request. Please try again.';
+}
+
+async function fetchSafeJson<T = any>(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_API_TIMEOUT_MS
+): Promise<SafeJsonResult<T>> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+
+    const rawText = await res.text();
+    const trimmed = rawText.trim();
+    const looksLikeHtml = trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<!doctype') || trimmed.startsWith('<html');
+
+    if (!trimmed || looksLikeHtml) {
+      return {
+        ok: false,
+        status: res.status || 502,
+        data: null,
+        fallbackMessage: getHttpFallbackMessage(res.status || 502, looksLikeHtml),
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as T;
+      return {
+        ok: res.ok,
+        status: res.status,
+        data: parsed,
+        fallbackMessage: getHttpFallbackMessage(res.status, false),
+      };
+    } catch {
+      return {
+        ok: false,
+        status: res.status || 502,
+        data: null,
+        fallbackMessage: getHttpFallbackMessage(res.status || 502, false),
+      };
+    }
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return {
+        ok: false,
+        status: 408,
+        data: null,
+        fallbackMessage: 'Request timed out. Please check your internet connection and try again.',
+      };
+    }
+    return {
+      ok: false,
+      status: 0,
+      data: null,
+      fallbackMessage: 'Network error connecting to ticketing service. Please check your connection and try again.',
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export const TicketService = {
   setAdminToken(token: string) {
     _adminToken = token;
@@ -33,23 +125,14 @@ export const TicketService = {
    * Strictly returns live counts only; no customer records or QR tokens
    */
   async getPublicCounts(): Promise<{ success: boolean; counts?: PublicInventoryCounts; error?: string }> {
-    try {
-      const res = await fetch('/api/inventory/counts');
-      const data = await res.json();
-      if (res.ok && data.success && data.counts) {
-        return { success: true, counts: data.counts };
-      }
-      return {
-        success: false,
-        error: data.error || 'Failed to read inventory counts from database.',
-      };
-    } catch (err: any) {
-      console.warn('Network error fetching public counts:', err);
-      return {
-        success: false,
-        error: err?.message || 'Network error connecting to ticketing service.',
-      };
+    const res = await fetchSafeJson<any>('/api/inventory/counts', { method: 'GET' }, DEFAULT_API_TIMEOUT_MS);
+    if (res.ok && res.data?.success && res.data?.counts) {
+      return { success: true, counts: res.data.counts };
     }
+    return {
+      success: false,
+      error: res.data?.error || res.data?.message || res.fallbackMessage,
+    };
   },
 
   /**
@@ -64,63 +147,52 @@ export const TicketService = {
     relworxAccount?: string;
     error?: string;
   }> {
-    try {
-      const res = await fetch('/api/admin/health', {
-        headers: this.getAdminHeaders(),
-      });
-      return await res.json();
-    } catch (err: any) {
-      return {
-        supabaseConnected: false,
-        project: 'Poolparty',
-        table: 'public.tickets',
-        totalRecordsFound: 0,
-        relworxConfigured: false,
-        error: err?.message || 'Server offline',
-      };
+    const res = await fetchSafeJson<any>('/api/admin/health', {
+      headers: this.getAdminHeaders(),
+    });
+    if (res.data && typeof res.data.supabaseConnected === 'boolean') {
+      return res.data;
     }
+    return {
+      supabaseConnected: false,
+      project: 'Poolparty',
+      table: 'public.tickets',
+      totalRecordsFound: 0,
+      relworxConfigured: false,
+      error: res.data?.error || res.fallbackMessage,
+    };
   },
 
   /**
    * Fetch all tickets from Supabase for authenticated Admin table
    */
   async getAllTickets(): Promise<{ success: boolean; tickets: TicketRecord[]; error?: string }> {
-    try {
-      const res = await fetch('/api/admin/tickets', {
-        headers: this.getAdminHeaders(),
-      });
-      const data = await res.json();
-      if (res.status === 401) {
-        return { success: false, tickets: [], error: 'UNAUTHORIZED' };
-      }
-      if (data.success && Array.isArray(data.tickets)) {
-        return { success: true, tickets: data.tickets };
-      }
-      return { success: false, tickets: [], error: data.error || 'Failed to fetch tickets' };
-    } catch (err: any) {
-      return { success: false, tickets: [], error: err?.message };
+    const res = await fetchSafeJson<any>('/api/admin/tickets', {
+      headers: this.getAdminHeaders(),
+    });
+    if (res.status === 401) {
+      return { success: false, tickets: [], error: 'UNAUTHORIZED' };
     }
+    if (res.data?.success && Array.isArray(res.data.tickets)) {
+      return { success: true, tickets: res.data.tickets };
+    }
+    return { success: false, tickets: [], error: res.data?.error || res.fallbackMessage };
   },
 
   /**
    * Fetch all orders from Supabase for authenticated Admin table
    */
   async getAllOrders(): Promise<{ success: boolean; orders: any[]; error?: string }> {
-    try {
-      const res = await fetch('/api/admin/orders', {
-        headers: this.getAdminHeaders(),
-      });
-      const data = await res.json();
-      if (res.status === 401) {
-        return { success: false, orders: [], error: 'UNAUTHORIZED' };
-      }
-      if (data.success && Array.isArray(data.orders)) {
-        return { success: true, orders: data.orders };
-      }
-      return { success: false, orders: [], error: data.error || 'Failed to fetch orders' };
-    } catch (err: any) {
-      return { success: false, orders: [], error: err?.message };
+    const res = await fetchSafeJson<any>('/api/admin/orders', {
+      headers: this.getAdminHeaders(),
+    });
+    if (res.status === 401) {
+      return { success: false, orders: [], error: 'UNAUTHORIZED' };
     }
+    if (res.data?.success && Array.isArray(res.data.orders)) {
+      return { success: true, orders: res.data.orders };
+    }
+    return { success: false, orders: [], error: res.data?.error || res.fallbackMessage };
   },
 
   /**
@@ -190,50 +262,43 @@ export const TicketService = {
     buyerEmail: string;
     buyerPhone: string;
   }): Promise<{ success: boolean; message: string; tickets?: TicketRecord[] }> {
-    try {
-      const res = await fetch('/api/admin/physical-sale', {
+    const res = await fetchSafeJson<any>(
+      '/api/admin/physical-sale',
+      {
         method: 'POST',
         headers: this.getAdminHeaders(),
         body: JSON.stringify(params),
-      });
-      return await res.json();
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Network error recording physical sale' };
+      },
+      PAYMENT_API_TIMEOUT_MS
+    );
+    if (res.data && typeof res.data.success === 'boolean') {
+      return res.data;
     }
+    return { success: false, message: res.fallbackMessage };
   },
 
   /**
    * Admin confirms payment in Supabase (Protected)
    */
   async confirmPayment(ticketId: string): Promise<boolean> {
-    try {
-      const res = await fetch('/api/admin/confirm-payment', {
-        method: 'POST',
-        headers: this.getAdminHeaders(),
-        body: JSON.stringify({ ticketId }),
-      });
-      const data = await res.json();
-      return Boolean(data.success);
-    } catch {
-      return false;
-    }
+    const res = await fetchSafeJson<any>('/api/admin/confirm-payment', {
+      method: 'POST',
+      headers: this.getAdminHeaders(),
+      body: JSON.stringify({ ticketId }),
+    });
+    return Boolean(res.data?.success);
   },
 
   /**
    * Admin releases ticket back to inventory in Supabase (Protected)
    */
   async cancelTicket(ticketId: string, releaseToInventory: boolean = true): Promise<boolean> {
-    try {
-      const res = await fetch('/api/admin/release-ticket', {
-        method: 'POST',
-        headers: this.getAdminHeaders(),
-        body: JSON.stringify({ ticketId, releaseToInventory }),
-      });
-      const data = await res.json();
-      return Boolean(data.success);
-    } catch {
-      return false;
-    }
+    const res = await fetchSafeJson<any>('/api/admin/release-ticket', {
+      method: 'POST',
+      headers: this.getAdminHeaders(),
+      body: JSON.stringify({ ticketId, releaseToInventory }),
+    });
+    return Boolean(res.data?.success);
   },
 
   /**
@@ -257,19 +322,28 @@ export const TicketService = {
     tickets?: TicketRecord[];
     error?: string;
   }> {
-    try {
-      const res = await fetch('/api/payments/relworx-initiate', {
+    const res = await fetchSafeJson<any>(
+      '/api/payments/relworx-initiate',
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
-      return await res.json();
-    } catch (err: any) {
+      },
+      PAYMENT_API_TIMEOUT_MS
+    );
+
+    if (res.data && typeof res.data.success === 'boolean') {
       return {
-        success: false,
-        message: err?.message || 'Network error connecting to payment gateway.',
+        ...res.data,
+        message: res.data.message || res.data.error || res.fallbackMessage,
       };
     }
+
+    return {
+      success: false,
+      message: res.fallbackMessage,
+      error: 'API_ERROR',
+    };
   },
 
   /**
@@ -303,17 +377,22 @@ export const TicketService = {
     reservedUntil?: string;
     secondsRemaining?: number;
   }> {
-    try {
-      const res = await fetch(`/api/orders/${encodeURIComponent(orderRef)}/status`);
-      return await res.json();
-    } catch (err: any) {
-      return {
-        success: false,
-        orderRef,
-        status: 'pending',
-        message: err?.message || 'Error checking payment status.',
-      };
+    const res = await fetchSafeJson<any>(
+      `/api/orders/${encodeURIComponent(orderRef)}/status`,
+      { method: 'GET' },
+      DEFAULT_API_TIMEOUT_MS
+    );
+
+    if (res.data && res.data.status) {
+      return res.data;
     }
+
+    return {
+      success: false,
+      orderRef,
+      status: 'pending',
+      message: res.fallbackMessage,
+    };
   },
 
   /**
@@ -321,37 +400,50 @@ export const TicketService = {
    * Returns only issued and paid tickets from Supabase
    */
   async lookupTickets(contact: string): Promise<{ success: boolean; count: number; tickets: TicketRecord[]; message?: string }> {
-    try {
-      const res = await fetch('/api/orders/lookup', {
+    const res = await fetchSafeJson<any>(
+      '/api/orders/lookup',
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contact }),
-      });
-      return await res.json();
-    } catch (err: any) {
+      },
+      DEFAULT_API_TIMEOUT_MS
+    );
+
+    if (res.data && typeof res.data.success === 'boolean') {
       return {
-        success: false,
-        count: 0,
-        tickets: [],
-        message: err?.message || 'Error looking up tickets.',
+        success: res.data.success,
+        count: res.data.count || 0,
+        tickets: Array.isArray(res.data.tickets) ? res.data.tickets : [],
+        message: res.data.message,
       };
     }
+
+    return {
+      success: false,
+      count: 0,
+      tickets: [],
+      message: res.fallbackMessage,
+    };
   },
 
   /**
    * Admin verify Relworx transaction (Protected)
    */
   async verifyRelworxTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
-    try {
-      const res = await fetch('/api/admin/verify-relworx-transaction', {
+    const res = await fetchSafeJson<any>(
+      '/api/admin/verify-relworx-transaction',
+      {
         method: 'POST',
         headers: this.getAdminHeaders(),
         body: JSON.stringify({ orderRef }),
-      });
-      return await res.json();
-    } catch (err: any) {
-      return { success: false, message: err?.message || 'Verification error' };
+      },
+      PAYMENT_API_TIMEOUT_MS
+    );
+    if (res.data && typeof res.data.success === 'boolean') {
+      return res.data;
     }
+    return { success: false, message: res.fallbackMessage };
   },
 
   async verifyFlwTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
@@ -362,18 +454,21 @@ export const TicketService = {
    * Atomic Gate Check-in (Calls secure server endpoint)
    */
   async verifyAndCheckIn(tokenOrNumber: string): Promise<CheckInResult> {
-    try {
-      const res = await fetch('/api/tickets/verify-checkin', {
+    const res = await fetchSafeJson<CheckInResult>(
+      '/api/tickets/verify-checkin',
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tokenOrNumber }),
-      });
-      return await res.json();
-    } catch (err: any) {
-      return {
-        status: 'INVALID',
-        message: err?.message || 'Network error during gate verification',
-      };
+      },
+      DEFAULT_API_TIMEOUT_MS
+    );
+    if (res.data && res.data.status) {
+      return res.data;
     }
+    return {
+      status: 'INVALID',
+      message: res.fallbackMessage,
+    };
   },
 };

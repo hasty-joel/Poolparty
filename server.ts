@@ -1,14 +1,37 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from 'node:fs';
+import module from 'node:module';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import dotenv from 'dotenv';
-import { createExpressApp } from './src/server/app.ts';
 
 dotenv.config();
+
+// Enable Node 22 native TS execution (`node server.ts`) to resolve `.js` specifiers to `.ts` source files
+if (typeof (module as any).registerHooks === 'function') {
+  (module as any).registerHooks({
+    resolve(specifier: string, context: any, nextResolve: any) {
+      if (
+        (specifier.startsWith('./') || specifier.startsWith('../')) &&
+        specifier.endsWith('.js') &&
+        context.parentURL?.startsWith('file:')
+      ) {
+        const parentDir = path.dirname(fileURLToPath(context.parentURL));
+        const jsCandidate = path.resolve(parentDir, specifier);
+        const tsCandidate = jsCandidate.slice(0, -3) + '.ts';
+        if (!fs.existsSync(jsCandidate) && fs.existsSync(tsCandidate)) {
+          return nextResolve(pathToFileURL(tsCandidate).href, context);
+        }
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  const { createExpressApp } = await import('./src/server/app.js');
   const app = createExpressApp();
   const PORT = parseInt(process.env.PORT || '3000', 10);
 

@@ -75,20 +75,35 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   const unitPrice = tierInfo.priceUgx;
   const totalPrice = unitPrice * quantity;
 
-  // Remaining inventory strictly from Supabase records
+  // Remaining inventory strictly from Supabase records when loaded
   const remainingInventory = publicCounts
     ? selectedTier === 'vip'
       ? publicCounts.VIP.available
       : publicCounts.ORDINARY.available
-    : 0;
+    : null;
+
+  const isTierSoldOut = remainingInventory !== null && remainingInventory <= 0;
 
   const handleTierChange = (tier: TicketTier) => {
     setSelectedTier(tier);
+    setForm((prev) => ({ ...prev, tier }));
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.inventory;
+      return next;
+    });
+    if (publicCounts) {
+      const tierAvailable = tier === 'vip' ? publicCounts.VIP.available : publicCounts.ORDINARY.available;
+      if (tierAvailable > 0 && quantity > tierAvailable) {
+        setQuantity(Math.min(10, tierAvailable));
+      }
+    }
   };
 
   const handleQuantityChange = (delta: number) => {
     const next = quantity + delta;
-    const maxAllowed = remainingInventory > 0 ? Math.min(10, remainingInventory) : 1;
+    const maxAllowed =
+      remainingInventory !== null && remainingInventory > 0 ? Math.min(10, remainingInventory) : 10;
     if (next >= 1 && next <= maxAllowed) {
       setQuantity(next);
     }
@@ -97,24 +112,29 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   const validate = (): boolean => {
     const errs: { [key: string]: string } = {};
 
-    if (!form.fullName.trim() || form.fullName.trim().length < 3) {
+    if (!form.fullName.trim() || form.fullName.trim().length < 2) {
       errs.fullName = 'Please enter your full name as it will appear on your pass.';
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!form.email.trim() || !emailRegex.test(form.email)) {
+    if (!form.email.trim() || !emailRegex.test(form.email.trim())) {
       errs.email = 'Please provide a valid email address.';
     }
 
-    const cleanedPhone = form.phone.replace(/[\s-]/g, '');
-    if (!cleanedPhone || cleanedPhone.length < 9) {
-      errs.phone = 'Please provide a valid Uganda phone number (e.g. 0775 198 484).';
+    let cleanedPhone = form.phone.replace(/[\s\-\(\)]/g, '');
+    if (cleanedPhone.startsWith('+256')) cleanedPhone = cleanedPhone.substring(4);
+    else if (cleanedPhone.startsWith('256')) cleanedPhone = cleanedPhone.substring(3);
+    else if (cleanedPhone.startsWith('0')) cleanedPhone = cleanedPhone.substring(1);
+
+    if (!/^[73][0-9]{8}$/.test(cleanedPhone)) {
+      errs.phone = 'Please provide a valid Uganda Mobile Money number (e.g. 0775 198 484 or +256 701 234567).';
     }
 
-    if (!publicCounts) {
-      errs.inventory = 'Cannot complete reservation: Live database is currently offline or unreachable.';
-    } else if (remainingInventory < quantity) {
-      errs.inventory = `Only ${remainingInventory} ${selectedTier.toUpperCase()} pass(es) remaining in stock.`;
+    if (remainingInventory !== null && remainingInventory < quantity) {
+      errs.inventory =
+        remainingInventory === 0
+          ? `${selectedTier.toUpperCase()} passes are currently sold out.`
+          : `Only ${remainingInventory} ${selectedTier.toUpperCase()} pass(es) remaining in stock.`;
     }
 
     setErrors(errs);
@@ -123,6 +143,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!validate()) return;
 
     setIsSubmitting(true);
@@ -141,15 +162,15 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
       if (!res.success || !res.orderRef) {
         let msg = res.message || 'Payment initiation failed. Please try again.';
         if (res.message?.includes('API disabled')) {
-          msg = 'Relworx Mobile Money API is currently disabled for this merchant account. Please enable API access in the Relworx dashboard at payments.relworx.com to accept customer payments.';
+          msg =
+            'Relworx Mobile Money API is currently disabled for this merchant account. Please enable API access in the Relworx dashboard to accept customer payments.';
         }
         setErrors({ inventory: msg });
-        setIsSubmitting(false);
         return;
       }
 
-      // Refresh stock counts from database
-      refreshCounts();
+      // Refresh stock counts from database in background
+      void refreshCounts();
 
       // Open Relworx checkout modal
       setCheckoutModal({
@@ -161,8 +182,10 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         buyerPhone: form.phone.trim(),
         network,
       });
-    } catch (err: any) {
-      setErrors({ inventory: err?.message || 'Error processing reservation' });
+    } catch {
+      setErrors({
+        inventory: 'Unable to submit your reservation right now. Please check your connection and try again.',
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -358,8 +381,13 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                   <button
                     type="button"
                     onClick={() => handleQuantityChange(1)}
-                    disabled={quantity >= Math.min(10, remainingInventory)}
-                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer transition-colors"
+                    disabled={
+                      quantity >=
+                      (remainingInventory !== null && remainingInventory > 0
+                        ? Math.min(10, remainingInventory)
+                        : 10)
+                    }
+                    className="w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white flex items-center justify-center cursor-pointer disabled:cursor-not-allowed transition-colors"
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -498,18 +526,31 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 </div>
               </div>
 
+              {/* Inline Submission / Inventory Error directly above Submit CTA */}
+              {errors.inventory && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-xl bg-rose-950/60 border border-rose-500/70 text-rose-200 text-xs flex items-start gap-2.5"
+                >
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span>{errors.inventory}</span>
+                </div>
+              )}
+
               {/* Submit CTA */}
-              <div className="pt-4">
+              <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={isSubmitting || remainingInventory < quantity}
-                  className="w-full py-3.5 text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2 font-display"
+                  disabled={isSubmitting || isTierSoldOut}
+                  className="w-full py-3.5 text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2 font-display"
                 >
                   {isSubmitting ? (
                     <div className="flex items-center gap-2">
                       <RefreshCw className="w-4 h-4 animate-spin" />
                       <span>Locking Inventory & Initiating...</span>
                     </div>
+                  ) : isTierSoldOut ? (
+                    <span>{selectedTier.toUpperCase()} Passes Sold Out</span>
                   ) : (
                     <>
                       <span>Pay via {network} MoMo · UGX {totalPrice.toLocaleString()}</span>

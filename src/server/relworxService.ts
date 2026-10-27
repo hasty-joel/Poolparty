@@ -35,22 +35,31 @@ export interface RelworxStatusCheckResult {
   raw?: any;
 }
 
+const RELWORX_TIMEOUT_MS = 8500;
+
+function sanitizeEnvValue(val: string | undefined): string | undefined {
+  if (!val) return undefined;
+  const trimmed = val.trim().replace(/^["']|["']$/g, '').trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export const RelworxService = {
   getApiKey(): string | undefined {
-    return process.env.RELWORX_API_KEY;
+    return sanitizeEnvValue(process.env.RELWORX_API_KEY);
   },
 
   getAccountNo(): string | undefined {
-    return process.env.RELWORX_ACCOUNT_NO;
+    return sanitizeEnvValue(process.env.RELWORX_ACCOUNT_NO);
   },
 
   getWebhookSecret(): string | undefined {
-    return process.env.RELWORX_WEBHOOK_SECRET;
+    return sanitizeEnvValue(process.env.RELWORX_WEBHOOK_SECRET);
   },
 
   isConfigured(): boolean {
     const key = this.getApiKey();
-    return Boolean(key && key.trim().length > 5);
+    const accountNo = this.getAccountNo();
+    return Boolean(key && key.length > 5 && accountNo && accountNo.length > 3);
   },
 
   /**
@@ -58,7 +67,7 @@ export const RelworxService = {
    * Supports both 07XXXXXXXX and 03XXXXXXXX Uganda prefixes
    */
   formatUgandaMsisdn(phone: string): { msisdn: string; local: string; valid: boolean } {
-    let clean = phone.replace(/[\s\-\(\)]/g, '');
+    let clean = String(phone || '').replace(/[\s\-\(\)]/g, '');
 
     if (clean.startsWith('+256')) {
       clean = clean.substring(4);
@@ -92,14 +101,23 @@ export const RelworxService = {
     buyerName: string;
     isSandbox?: boolean;
   }): Promise<RelworxPaymentResponse> {
-    const apiKey = this.getApiKey();
-    const accountNo = this.getAccountNo() || 'RELWORX_POOLPARTY';
-
     const { msisdn, valid } = this.formatUgandaMsisdn(params.phone);
-    if (!valid && !msisdn.startsWith('+256')) {
+    if (!valid) {
       return {
         success: false,
-        message: `Invalid Uganda phone number format: "${params.phone}". Expected 9-10 digits (e.g. 0771234567 or +256771234567).`,
+        message: 'Please enter a valid Uganda Mobile Money number (e.g. 0775 198 484 or +256 701 234567).',
+        error: 'INVALID_PHONE_NUMBER',
+      };
+    }
+
+    const apiKey = this.getApiKey();
+    const accountNo = this.getAccountNo();
+
+    if (!apiKey || !accountNo || !this.isConfigured()) {
+      return {
+        success: false,
+        message: 'Mobile Money payment gateway is not configured on the server yet. Please contact the event organizer.',
+        error: 'RELWORX_NOT_CONFIGURED',
       };
     }
 
@@ -121,13 +139,8 @@ export const RelworxService = {
       description: params.description.substring(0, 100),
     };
 
-    if (!this.isConfigured()) {
-      return {
-        success: false,
-        message: 'Relworx Mobile Money gateway is not configured. Please supply RELWORX_API_KEY and RELWORX_ACCOUNT_NO in your environment.',
-        error: 'RELWORX_NOT_CONFIGURED',
-      };
-    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), RELWORX_TIMEOUT_MS);
 
     try {
       const response = await fetch('https://payments.relworx.com/api/mobile-money/request-payment', {
@@ -138,6 +151,7 @@ export const RelworxService = {
           'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
 
       const responseText = await response.text();
@@ -148,28 +162,41 @@ export const RelworxService = {
         data = { raw: responseText };
       }
 
-      if (!response.ok) {
-        console.error('[Relworx API Error]', response.status, data);
-        const errMsg = data.message || data.error || `Relworx API responded with HTTP ${response.status}`;
+      if (!response.ok || data.success === false) {
+        console.error('[Relworx API Error]', response.status);
+        const errMsg =
+          typeof data.message === 'string' && data.message.trim().length > 0
+            ? data.message
+            : `Mobile money gateway rejected the payment request (HTTP ${response.status}).`;
         return {
           success: false,
           message: errMsg,
-          error: errMsg,
+          error: 'RELWORX_REQUEST_FAILED',
         };
       }
 
       return {
-        success: Boolean(data.success !== false),
+        success: true,
         message: data.message || 'Payment prompt initiated. Check your phone to enter PIN.',
         internal_reference: data.internal_reference || data.id || data.reference,
       };
     } catch (err: any) {
-      console.error('[Relworx Network Exception]', err);
+      if (err?.name === 'AbortError') {
+        console.error('[Relworx Timeout] Payment initiation exceeded timeout');
+        return {
+          success: false,
+          message: 'Mobile Money provider took too long to respond. Your ticket reservation was released; please try again.',
+          error: 'RELWORX_TIMEOUT',
+        };
+      }
+      console.error('[Relworx Network Exception]', err?.message || err);
       return {
         success: false,
-        message: err?.message || 'Could not connect to Relworx payment service.',
-        error: err?.message,
+        message: 'Could not reach the Mobile Money payment gateway. Please try again shortly.',
+        error: 'RELWORX_NETWORK_ERROR',
       };
+    } finally {
+      clearTimeout(timeoutId);
     }
   },
 
@@ -182,15 +209,18 @@ export const RelworxService = {
     reference?: string;
   }): Promise<RelworxStatusCheckResult> {
     const apiKey = this.getApiKey();
-    const accountNo = this.getAccountNo() || 'RELWORX_POOLPARTY';
+    const accountNo = this.getAccountNo();
 
-    if (!this.isConfigured()) {
+    if (!apiKey || !accountNo || !this.isConfigured()) {
       return {
         success: false,
         status: 'unknown',
-        message: 'Relworx API is not configured with RELWORX_API_KEY in environment.',
+        message: 'Mobile Money payment gateway is not configured on the server.',
       };
     }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), RELWORX_TIMEOUT_MS);
 
     try {
       const queryParams = new URLSearchParams();
@@ -198,11 +228,9 @@ export const RelworxService = {
         queryParams.append('internal_reference', params.internalReference);
       }
       if (params.reference) {
-        queryParams.append('reference', params.reference);
+        queryParams.append('customer_reference', params.reference);
       }
-      if (accountNo) {
-        queryParams.append('account_no', accountNo);
-      }
+      queryParams.append('account_no', accountNo);
 
       const url = `https://payments.relworx.com/api/mobile-money/check-request-status?${queryParams.toString()}`;
 
@@ -212,6 +240,7 @@ export const RelworxService = {
           'Accept': 'application/vnd.relworx.v2',
           'Authorization': `Bearer ${apiKey}`,
         },
+        signal: controller.signal,
       });
 
       const responseText = await response.text();
@@ -226,13 +255,13 @@ export const RelworxService = {
         return {
           success: false,
           status: 'unknown',
-          message: data.message || `Relworx status check returned HTTP ${response.status}`,
+          message: typeof data.message === 'string' ? data.message : `Status check returned HTTP ${response.status}`,
           raw: data,
         };
       }
 
-      // Relworx status normalization
-      const rawStatus = String(data.status || data.transaction_status || '').toLowerCase();
+      // Relworx v2 status normalization (`status`, `request_status`, or `transaction_status`)
+      const rawStatus = String(data.status || data.request_status || data.transaction_status || '').toLowerCase();
       let normalizedStatus: 'pending' | 'success' | 'failed' | 'unknown' = 'pending';
 
       if (['success', 'successful', 'paid', 'completed'].includes(rawStatus)) {
@@ -247,19 +276,21 @@ export const RelworxService = {
         success: true,
         status: normalizedStatus,
         internal_reference: data.internal_reference || params.internalReference,
-        reference: data.reference || params.reference,
+        reference: data.customer_reference || data.reference || params.reference,
         amount: data.amount,
         currency: data.currency,
         message: data.message,
         raw: data,
       };
     } catch (err: any) {
-      console.error('[Relworx Check Status Exception]', err);
+      console.error('[Relworx Check Status Exception]', err?.message || err);
       return {
         success: false,
         status: 'unknown',
-        message: err?.message,
+        message: err?.name === 'AbortError' ? 'Payment status check timed out.' : 'Unable to check payment status.',
       };
+    } finally {
+      clearTimeout(timeoutId);
     }
   },
 
