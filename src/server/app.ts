@@ -1,7 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import { SupabaseServerService } from './supabaseServer.js';
-import { RelworxService } from './relworxService.js';
+import { RelworxService, sanitizeDiagnosticText } from './relworxService.js';
 
 dotenv.config();
 
@@ -75,7 +75,9 @@ export function createExpressApp() {
    */
   const handleInitiatePayment = async (req: express.Request, res: express.Response) => {
     try {
-      const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = req.body || {};
+      const { category, quantity, buyerName, buyerEmail, buyerPhone, network, idempotencyKey } = req.body || {};
+      const headerIdempotencyKey =
+        typeof req.headers['x-idempotency-key'] === 'string' ? req.headers['x-idempotency-key'] : undefined;
 
       if (!category || quantity === undefined || quantity === null || !buyerName || !buyerEmail || !buyerPhone || !network) {
         return res.status(400).json({
@@ -143,17 +145,29 @@ export function createExpressApp() {
         buyerEmail: buyerEmail.trim(),
         buyerPhone: String(buyerPhone).trim(),
         network,
+        idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : headerIdempotencyKey,
       });
 
       if (!result.success) {
         const errCode = result.error || '';
+        const providerCode = result.code || '';
+
+        if (result.retryAfterSeconds && result.retryAfterSeconds > 0) {
+          res.setHeader('Retry-After', String(result.retryAfterSeconds));
+        }
+
         if (errCode === 'VALIDATION_ERROR' || errCode === 'INVALID_PHONE_NUMBER') {
           return res.status(400).json(result);
         }
         if (errCode === 'INSUFFICIENT_INVENTORY') {
           return res.status(409).json(result);
         }
+        if (errCode === 'RATE_LIMITED' || providerCode === 'RATE_LIMITED') {
+          return res.status(429).json(result);
+        }
         if (
+          errCode === 'PAYMENT_PROVIDER_UNAVAILABLE' ||
+          providerCode === 'API_DISABLED' ||
           errCode === 'SUPABASE_NOT_CONFIGURED' ||
           errCode === 'RELWORX_NOT_CONFIGURED' ||
           errCode === 'DATABASE_ERROR' ||
@@ -166,7 +180,7 @@ export function createExpressApp() {
 
       return res.status(200).json(result);
     } catch (err: any) {
-      console.error('Relworx payment initiation error:', err?.message || err);
+      console.error('[Payment Initiation Route Error]', sanitizeDiagnosticText(err?.message || ''));
       return res.status(500).json({
         success: false,
         message: 'Unexpected server error while initiating payment. Please try again.',
@@ -311,6 +325,7 @@ export function createExpressApp() {
       ordersTableReady: health.ordersTableReady,
       schemaWarning: health.schemaWarning,
       relworxConfigured: RelworxService.isConfigured(),
+      relworxStatus: RelworxService.getProviderHealthStatus(),
       relworxAccount: RelworxService.getAccountNo() ? 'Configured' : 'Missing',
       error: health.error,
     });

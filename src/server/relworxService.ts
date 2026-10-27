@@ -22,6 +22,9 @@ export interface RelworxPaymentResponse {
   message: string;
   internal_reference?: string;
   error?: string;
+  code?: string;
+  retryable?: boolean;
+  retryAfterSeconds?: number;
 }
 
 export interface RelworxStatusCheckResult {
@@ -32,15 +35,110 @@ export interface RelworxStatusCheckResult {
   amount?: number;
   currency?: string;
   message?: string;
+  code?: string;
   raw?: any;
 }
 
 const RELWORX_TIMEOUT_MS = 8500;
+const PROVIDER_DISABLED_COOLDOWN_MS = 30_000;
+
+export const CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE =
+  'Mobile Money payments are temporarily unavailable right now. You have not been charged, and your selected passes remain available. Please try again later.';
+
+let _providerDisabledUntilMs = 0;
 
 function sanitizeEnvValue(val: string | undefined): string | undefined {
   if (!val) return undefined;
   const trimmed = val.trim().replace(/^["']|["']$/g, '').trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Redact phone numbers, emails, account IDs, and bearer/API tokens before server logging
+ */
+export function sanitizeDiagnosticText(input: unknown): string {
+  const raw = typeof input === 'string' ? input : '';
+  if (!raw) return '';
+  return raw
+    .replace(/Bearer\s+[A-Za-z0-9._\-]+/gi, 'Bearer [REDACTED]')
+    .replace(/RELWORX_[A-Za-z0-9_\-]+/gi, 'RELWORX_[REDACTED]')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED_EMAIL]')
+    .replace(/\+?\d[\d\s\-()]{7,15}\d/g, '[REDACTED_PHONE]')
+    .slice(0, 240);
+}
+
+/**
+ * Extract normalized provider error code if present in Relworx response payload
+ */
+function extractProviderCode(data: any): string | undefined {
+  const directCandidates = [
+    data?.error_code,
+    data?.code,
+    typeof data?.error === 'string' ? data.error : data?.error?.code,
+    data?.reason,
+    data?.status_code,
+  ];
+
+  for (const candidate of directCandidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      const normalized = candidate.trim().toUpperCase();
+      if (/^[A-Z0-9_.\-]{2,64}$/.test(normalized)) {
+        return normalized;
+      }
+    }
+  }
+
+  if (Array.isArray(data?.errors)) {
+    for (const item of data.errors) {
+      const itemCode = item?.error_code || item?.code;
+      if (typeof itemCode === 'string' && itemCode.trim()) {
+        return itemCode.trim().toUpperCase();
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Explicitly detect Relworx `API_DISABLED` responses across all v1/v2 payload variants
+ */
+export function isRelworxApiDisabledPayload(data: any, rawText: string = ''): boolean {
+  const extractedCode = extractProviderCode(data);
+  if (extractedCode === 'API_DISABLED' || (extractedCode && extractedCode.includes('API_DISABLED'))) {
+    return true;
+  }
+
+  if (Array.isArray(data?.errors)) {
+    for (const item of data.errors) {
+      const itemText = `${item?.code || ''} ${item?.error_code || ''} ${item?.message || ''}`.toLowerCase();
+      if (
+        itemText.includes('api_disabled') ||
+        itemText.includes('api access is disabled') ||
+        itemText.includes('mobile money api is disabled')
+      ) {
+        return true;
+      }
+    }
+  }
+
+  const combinedMsg = [
+    typeof data?.message === 'string' ? data.message : '',
+    typeof data?.error === 'string' ? data.error : '',
+    typeof data?.error_description === 'string' ? data.error_description : '',
+    typeof data?.detail === 'string' ? data.detail : '',
+    !rawText.trim().startsWith('<') ? rawText : '',
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  return (
+    combinedMsg.includes('api_disabled') ||
+    combinedMsg.includes('mobile money api access is disabled') ||
+    combinedMsg.includes('api access is disabled') ||
+    combinedMsg.includes('mobile money api is disabled') ||
+    combinedMsg.includes('api is disabled for this merchant')
+  );
 }
 
 export const RelworxService = {
@@ -63,11 +161,38 @@ export const RelworxService = {
   },
 
   /**
+   * Short circuit-breaker cooldown so we never repeatedly call a disabled Relworx API
+   */
+  getDisabledCooldownRemainingSeconds(): number {
+    const remainingMs = _providerDisabledUntilMs - Date.now();
+    return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+  },
+
+  markProviderDisabled(cooldownMs: number = PROVIDER_DISABLED_COOLDOWN_MS): number {
+    _providerDisabledUntilMs = Date.now() + cooldownMs;
+    return Math.ceil(cooldownMs / 1000);
+  },
+
+  clearProviderDisabled(): void {
+    _providerDisabledUntilMs = 0;
+  },
+
+  resetProviderStateForTests(): void {
+    _providerDisabledUntilMs = 0;
+  },
+
+  getProviderHealthStatus(): 'not_configured' | 'api_disabled_cooldown' | 'configured' {
+    if (!this.isConfigured()) return 'not_configured';
+    if (this.getDisabledCooldownRemainingSeconds() > 0) return 'api_disabled_cooldown';
+    return 'configured';
+  },
+
+  /**
    * Format phone number to Relworx MSISDN specification (+256XXXXXXXXX)
    * Supports both 07XXXXXXXX and 03XXXXXXXX Uganda prefixes
    */
   formatUgandaMsisdn(phone: string): { msisdn: string; local: string; valid: boolean } {
-    let clean = String(phone || '').replace(/[\s\-\(\)]/g, '');
+    let clean = String(phone || '').replace(/[\s\-()]/g, '');
 
     if (clean.startsWith('+256')) {
       clean = clean.substring(4);
@@ -90,7 +215,7 @@ export const RelworxService = {
    * Request Payment (Push USSD prompt to customer's mobile money handset)
    * POST https://payments.relworx.com/api/mobile-money/request-payment
    *
-   * Rate Limit Note: Max 5 requests per 10 minutes per phone number (msisdn)
+   * Never automatically retries failed or disabled API calls.
    */
   async requestPayment(params: {
     reference: string;
@@ -107,6 +232,7 @@ export const RelworxService = {
         success: false,
         message: 'Please enter a valid Uganda Mobile Money number (e.g. 0775 198 484 or +256 701 234567).',
         error: 'INVALID_PHONE_NUMBER',
+        retryable: false,
       };
     }
 
@@ -116,12 +242,26 @@ export const RelworxService = {
     if (!apiKey || !accountNo || !this.isConfigured()) {
       return {
         success: false,
-        message: 'Mobile Money payment gateway is not configured on the server yet. Please contact the event organizer.',
+        message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
         error: 'RELWORX_NOT_CONFIGURED',
+        retryable: true,
       };
     }
 
-    // Relworx reference must be between 8 and 36 alphanumeric characters
+    // Short-circuit if Relworx recently reported API_DISABLED so we do not spam the provider
+    const cooldownSecs = this.getDisabledCooldownRemainingSeconds();
+    if (cooldownSecs > 0) {
+      return {
+        success: false,
+        message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
+        error: 'PAYMENT_PROVIDER_UNAVAILABLE',
+        code: 'API_DISABLED',
+        retryable: true,
+        retryAfterSeconds: cooldownSecs,
+      };
+    }
+
+    // Relworx reference must be between 8 and 36 alphanumeric/hyphen characters
     let cleanRef = params.reference.replace(/[^a-zA-Z0-9_\-]/g, '');
     if (cleanRef.length < 8) {
       cleanRef = `${cleanRef}_${Date.now()}`;
@@ -163,17 +303,66 @@ export const RelworxService = {
       }
 
       if (!response.ok || data.success === false) {
-        console.error('[Relworx API Error]', response.status);
-        const errMsg =
-          typeof data.message === 'string' && data.message.trim().length > 0
-            ? data.message
-            : `Mobile money gateway rejected the payment request (HTTP ${response.status}).`;
+        const isApiDisabled = isRelworxApiDisabledPayload(data, responseText);
+        const providerCode = isApiDisabled ? 'API_DISABLED' : extractProviderCode(data) || `HTTP_${response.status}`;
+
+        // Log sanitized server-side diagnostic metadata (zero credentials, zero buyer PII)
+        console.error('[Relworx Payment Initiation Rejected]', {
+          orderRef: cleanRef,
+          category: params.category,
+          amountUgx: payload.amount,
+          httpStatus: response.status,
+          providerCode,
+          providerDisabled: isApiDisabled,
+          diagnostic: sanitizeDiagnosticText(data?.message || data?.error || ''),
+        });
+
+        if (isApiDisabled) {
+          const retryAfterSeconds = this.markProviderDisabled();
+          return {
+            success: false,
+            message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
+            error: 'PAYMENT_PROVIDER_UNAVAILABLE',
+            code: 'API_DISABLED',
+            retryable: true,
+            retryAfterSeconds,
+          };
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          return {
+            success: false,
+            message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
+            error: 'PAYMENT_PROVIDER_UNAVAILABLE',
+            code: 'PROVIDER_AUTH_ERROR',
+            retryable: true,
+            retryAfterSeconds: 30,
+          };
+        }
+
+        if (response.status === 429) {
+          return {
+            success: false,
+            message: 'Too many payment requests were sent recently. Please wait a minute before trying again.',
+            error: 'RATE_LIMITED',
+            code: 'RATE_LIMITED',
+            retryable: true,
+            retryAfterSeconds: 60,
+          };
+        }
+
         return {
           success: false,
-          message: errMsg,
+          message:
+            'Unable to send the Mobile Money prompt right now. You have not been charged—please verify your number and try again shortly.',
           error: 'RELWORX_REQUEST_FAILED',
+          code: providerCode,
+          retryable: true,
         };
       }
+
+      // Provider accepted request — clear any previous disabled state
+      this.clearProviderDisabled();
 
       return {
         success: true,
@@ -182,18 +371,29 @@ export const RelworxService = {
       };
     } catch (err: any) {
       if (err?.name === 'AbortError') {
-        console.error('[Relworx Timeout] Payment initiation exceeded timeout');
+        console.error('[Relworx Timeout]', {
+          orderRef: cleanRef,
+          category: params.category,
+          amountUgx: payload.amount,
+        });
         return {
           success: false,
-          message: 'Mobile Money provider took too long to respond. Your ticket reservation was released; please try again.',
+          message: 'Mobile Money provider took too long to respond. Your reservation was released; please try again.',
           error: 'RELWORX_TIMEOUT',
+          code: 'PROVIDER_TIMEOUT',
+          retryable: true,
         };
       }
-      console.error('[Relworx Network Exception]', err?.message || err);
+      console.error('[Relworx Network Exception]', {
+        orderRef: cleanRef,
+        diagnostic: sanitizeDiagnosticText(err?.message || 'Network failure'),
+      });
       return {
         success: false,
-        message: 'Could not reach the Mobile Money payment gateway. Please try again shortly.',
+        message: 'Could not reach the Mobile Money payment service right now. You have not been charged; please try again shortly.',
         error: 'RELWORX_NETWORK_ERROR',
+        code: 'PROVIDER_NETWORK_ERROR',
+        retryable: true,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -216,6 +416,15 @@ export const RelworxService = {
         success: false,
         status: 'unknown',
         message: 'Mobile Money payment gateway is not configured on the server.',
+      };
+    }
+
+    if (this.getDisabledCooldownRemainingSeconds() > 0) {
+      return {
+        success: false,
+        status: 'unknown',
+        code: 'API_DISABLED',
+        message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
       };
     }
 
@@ -251,11 +460,27 @@ export const RelworxService = {
         data = { raw: responseText };
       }
 
-      if (!response.ok) {
+      if (!response.ok || data.success === false) {
+        const isApiDisabled = isRelworxApiDisabledPayload(data, responseText);
+        if (isApiDisabled) {
+          this.markProviderDisabled();
+          console.error('[Relworx Status Check Rejected: API_DISABLED]', {
+            orderRef: params.reference || null,
+            httpStatus: response.status,
+          });
+          return {
+            success: false,
+            status: 'unknown',
+            code: 'API_DISABLED',
+            message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
+          };
+        }
+
         return {
           success: false,
           status: 'unknown',
-          message: typeof data.message === 'string' ? data.message : `Status check returned HTTP ${response.status}`,
+          code: extractProviderCode(data),
+          message: 'Unable to confirm payment status with provider right now.',
           raw: data,
         };
       }
@@ -283,7 +508,10 @@ export const RelworxService = {
         raw: data,
       };
     } catch (err: any) {
-      console.error('[Relworx Check Status Exception]', err?.message || err);
+      console.error('[Relworx Check Status Exception]', {
+        orderRef: params.reference || null,
+        diagnostic: sanitizeDiagnosticText(err?.message || 'Status check error'),
+      });
       return {
         success: false,
         status: 'unknown',
@@ -301,7 +529,6 @@ export const RelworxService = {
   verifyWebhookSignature(signatureHeader: string | undefined, payloadBody: any): boolean {
     const secret = this.getWebhookSecret();
     if (!secret) {
-      // If secret not configured in dev, log warning but allow review in sandbox
       console.warn('[Relworx Webhook] RELWORX_WEBHOOK_SECRET not set in environment.');
       return true;
     }
@@ -313,7 +540,6 @@ export const RelworxService = {
     try {
       const bodyString = typeof payloadBody === 'string' ? payloadBody : JSON.stringify(payloadBody);
 
-      // Extract hash and timestamp if header is formatted as t=...,v1=... or v1=...
       let signatureHash = signatureHeader.trim();
       let timestamp: number | null = null;
 
@@ -329,7 +555,6 @@ export const RelworxService = {
         }
       }
 
-      // Prevent replay attacks if timestamp is present (> 15 minutes old)
       if (timestamp && !isNaN(timestamp)) {
         const ageSec = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
         if (ageSec > 900) {
@@ -338,10 +563,8 @@ export const RelworxService = {
         }
       }
 
-      // Compute HMAC-SHA256
       const computedHash = crypto.createHmac('sha256', secret).update(bodyString).digest('hex');
 
-      // Compare using timing-safe comparison
       const sigBuf = Buffer.from(signatureHash.toLowerCase(), 'utf-8');
       const compBuf = Buffer.from(computedHash.toLowerCase(), 'utf-8');
 
@@ -350,8 +573,8 @@ export const RelworxService = {
       }
 
       return crypto.timingSafeEqual(sigBuf, compBuf);
-    } catch (err) {
-      console.error('[Relworx Signature Verification Error]', err);
+    } catch {
+      console.error('[Relworx Signature Verification Error]');
       return false;
     }
   },

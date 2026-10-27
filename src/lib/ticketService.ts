@@ -312,6 +312,7 @@ export const TicketService = {
     buyerEmail: string;
     buyerPhone: string;
     network: 'MTN' | 'AIRTEL';
+    idempotencyKey?: string;
   }): Promise<{
     success: boolean;
     orderRef?: string;
@@ -321,12 +322,25 @@ export const TicketService = {
     totalAmountUgx?: number;
     tickets?: TicketRecord[];
     error?: string;
+    code?: string;
+    retryable?: boolean;
+    retryAfterSeconds?: number;
+    reusedExistingOrder?: boolean;
+    httpStatus?: number;
   }> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (payload.idempotencyKey) {
+      headers['X-Idempotency-Key'] = payload.idempotencyKey;
+    }
+
+    // Single request per user submission — never automatically retries a disabled provider API
     const res = await fetchSafeJson<any>(
       '/api/payments/relworx-initiate',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
       },
       PAYMENT_API_TIMEOUT_MS
@@ -335,14 +349,17 @@ export const TicketService = {
     if (res.data && typeof res.data.success === 'boolean') {
       return {
         ...res.data,
+        httpStatus: res.status,
         message: res.data.message || res.data.error || res.fallbackMessage,
       };
     }
 
     return {
       success: false,
+      httpStatus: res.status,
       message: res.fallbackMessage,
-      error: 'API_ERROR',
+      error: res.status === 408 || res.status === 0 ? 'NETWORK_UNCERTAIN' : 'API_ERROR',
+      retryable: true,
     };
   },
 

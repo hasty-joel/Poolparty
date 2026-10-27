@@ -1,9 +1,32 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { RelworxService } from './relworxService.js';
+import {
+  RelworxService,
+  CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
+  sanitizeDiagnosticText,
+} from './relworxService.js';
 import type { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order.js';
 
 dotenv.config();
+
+type InitiationResult = {
+  success: boolean;
+  orderRef?: string;
+  message: string;
+  relworxInternalRef?: string | null;
+  reservedUntil?: string;
+  totalAmountUgx?: number;
+  gateway?: 'relworx';
+  error?: string;
+  code?: string;
+  retryable?: boolean;
+  retryAfterSeconds?: number;
+  reusedExistingOrder?: boolean;
+};
+
+// Coalesces concurrent identical submissions to prevent duplicate orders and duplicate charges
+const _inFlightInitiations = new Map<string, Promise<InitiationResult>>();
+const _recentIdempotencyResults = new Map<string, { expiresAt: number; result: InitiationResult }>();
 
 function sanitizeEnv(val: string | undefined): string | undefined {
   if (!val) return undefined;
@@ -259,7 +282,7 @@ export const SupabaseServerService = {
     const nowIso = new Date().toISOString();
 
     try {
-      const { data: expiredTickets, error: tErr } = await client
+      let { data: expiredTickets, error: tErr } = await client
         .from('tickets')
         .update({
           status: 'available',
@@ -276,6 +299,27 @@ export const SupabaseServerService = {
         .lt('reserved_until', nowIso)
         .select('id');
 
+      // Fallback if optional relworx_internal_ref column is not yet present on public.tickets
+      if (tErr && (tErr.code === 'PGRST204' || tErr.code === '42703')) {
+        const retry = await client
+          .from('tickets')
+          .update({
+            status: 'available',
+            payment_status: 'unpaid',
+            buyer_name: null,
+            buyer_email: null,
+            buyer_phone: null,
+            order_ref: null,
+            reserved_until: null,
+          })
+          .eq('status', 'reserved')
+          .in('payment_status', ['unpaid', 'pending'])
+          .lt('reserved_until', nowIso)
+          .select('id');
+        expiredTickets = retry.data;
+        tErr = retry.error;
+      }
+
       if (!tErr && expiredTickets && expiredTickets.length > 0) {
         await client
           .from('orders')
@@ -285,8 +329,8 @@ export const SupabaseServerService = {
 
         return expiredTickets.length;
       }
-    } catch (err) {
-      console.warn('Error releasing expired reservations in Supabase:', err);
+    } catch (err: any) {
+      console.warn('Error releasing expired reservations in Supabase:', sanitizeDiagnosticText(err?.message || ''));
     }
 
     return 0;
@@ -359,23 +403,16 @@ export const SupabaseServerService = {
     buyerEmail: string;
     buyerPhone: string;
     network: PaymentNetwork;
-  }): Promise<{
-    success: boolean;
-    orderRef?: string;
-    message: string;
-    relworxInternalRef?: string | null;
-    reservedUntil?: string;
-    totalAmountUgx?: number;
-    gateway?: 'relworx';
-    error?: string;
-  }> {
-    const { category, quantity, buyerName, buyerEmail, buyerPhone, network } = params;
+    idempotencyKey?: string;
+  }): Promise<InitiationResult> {
+    const { category, quantity, buyerName, buyerEmail, buyerPhone, network, idempotencyKey } = params;
 
     if (!quantity || quantity < 1 || quantity > 10) {
       return {
         success: false,
         message: 'Invalid ticket quantity (minimum 1, maximum 10).',
         error: 'VALIDATION_ERROR',
+        retryable: false,
       };
     }
 
@@ -384,6 +421,7 @@ export const SupabaseServerService = {
         success: false,
         message: 'Invalid ticket category. Must be VIP or ORDINARY.',
         error: 'VALIDATION_ERROR',
+        retryable: false,
       };
     }
 
@@ -392,6 +430,7 @@ export const SupabaseServerService = {
         success: false,
         message: 'Invalid mobile money network. Must be MTN or AIRTEL.',
         error: 'VALIDATION_ERROR',
+        retryable: false,
       };
     }
 
@@ -400,6 +439,7 @@ export const SupabaseServerService = {
         success: false,
         message: 'Please provide the attendee full name.',
         error: 'VALIDATION_ERROR',
+        retryable: false,
       };
     }
 
@@ -409,6 +449,7 @@ export const SupabaseServerService = {
         success: false,
         message: 'Please provide a valid email address.',
         error: 'VALIDATION_ERROR',
+        retryable: false,
       };
     }
 
@@ -418,26 +459,108 @@ export const SupabaseServerService = {
         success: false,
         message: 'Please enter a valid Uganda Mobile Money phone number (e.g. 0775 198 484).',
         error: 'VALIDATION_ERROR',
+        retryable: false,
       };
     }
 
-    // Check database and payment gateway configuration BEFORE locking inventory
+    // 1. Check database and payment gateway configuration BEFORE locking inventory
     const { client, configError } = getSupabaseClient();
     if (!client) {
       return {
         success: false,
         message: configError || 'Ticketing database is currently unavailable. Please try again later.',
         error: 'SUPABASE_NOT_CONFIGURED',
+        retryable: true,
       };
     }
 
     if (!RelworxService.isConfigured()) {
       return {
         success: false,
-        message: 'Mobile Money payment gateway is not configured yet. Please contact the event organizer.',
+        message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
         error: 'RELWORX_NOT_CONFIGURED',
+        code: 'PROVIDER_NOT_CONFIGURED',
+        retryable: true,
       };
     }
+
+    // 2. Do NOT lock tickets or repeatedly call Relworx while API_DISABLED cooldown is active
+    const disabledCooldown = RelworxService.getDisabledCooldownRemainingSeconds();
+    if (disabledCooldown > 0) {
+      return {
+        success: false,
+        message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
+        error: 'PAYMENT_PROVIDER_UNAVAILABLE',
+        code: 'API_DISABLED',
+        retryable: true,
+        retryAfterSeconds: disabledCooldown,
+      };
+    }
+
+    // 3. Deduplicate rapid/concurrent retries for the same idempotencyKey or buyer+tier+quantity
+    const cleanIdempotencyKey =
+      typeof idempotencyKey === 'string' && idempotencyKey.trim().length >= 8
+        ? idempotencyKey.trim().slice(0, 80)
+        : undefined;
+
+    if (cleanIdempotencyKey) {
+      const cached = _recentIdempotencyResults.get(cleanIdempotencyKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.result;
+      }
+      _recentIdempotencyResults.delete(cleanIdempotencyKey);
+    }
+
+    const dedupeLockKey = cleanIdempotencyKey || `${phoneCheck.msisdn}|${category}|${quantity}|${network}`;
+    const existingInFlight = _inFlightInitiations.get(dedupeLockKey);
+    if (existingInFlight) {
+      return existingInFlight;
+    }
+
+    const executionPromise = this._executeRelworxInitiation({
+      client,
+      category,
+      quantity,
+      buyerName: buyerName.trim(),
+      buyerEmail: buyerEmail.trim(),
+      buyerPhone: buyerPhone.trim(),
+      msisdn: phoneCheck.msisdn,
+      localPhone: phoneCheck.local,
+      network,
+    });
+
+    _inFlightInitiations.set(dedupeLockKey, executionPromise);
+
+    try {
+      const result = await executionPromise;
+      // Cache successful pending order initiation briefly for idempotencyKey network retries
+      if (cleanIdempotencyKey && result.success && result.orderRef) {
+        _recentIdempotencyResults.set(cleanIdempotencyKey, {
+          expiresAt: Date.now() + 9 * 60 * 1000,
+          result: { ...result, reusedExistingOrder: true },
+        });
+      }
+      return result;
+    } finally {
+      _inFlightInitiations.delete(dedupeLockKey);
+    }
+  },
+
+  /**
+   * Internal execution path for Relworx checkout initiation (protected by concurrency/idempotency lock)
+   */
+  async _executeRelworxInitiation(params: {
+    client: SupabaseClient;
+    category: 'VIP' | 'ORDINARY';
+    quantity: number;
+    buyerName: string;
+    buyerEmail: string;
+    buyerPhone: string;
+    msisdn: string;
+    localPhone: string;
+    network: PaymentNetwork;
+  }): Promise<InitiationResult> {
+    const { client, category, quantity, buyerName, buyerEmail, buyerPhone, msisdn, localPhone, network } = params;
 
     // Trusted prices enforced strictly on server — never trust client submission
     const unitPrice = category === 'VIP' ? 50000 : 20000;
@@ -446,7 +569,20 @@ export const SupabaseServerService = {
     // Release any stale expired reservations first
     await this.releaseExpiredReservations();
 
-    // Generate unique order reference (8-36 alphanumeric characters)
+    // Prevent duplicate active orders & duplicate charges if buyer retries while a prompt is already live
+    const reusableOrder = await this.findReusableActivePendingOrder(client, {
+      buyerPhone,
+      msisdn,
+      localPhone,
+      category,
+      quantity,
+    });
+
+    if (reusableOrder) {
+      return reusableOrder;
+    }
+
+    // Generate unique order reference (8-36 alphanumeric/hyphen characters)
     const timestamp = Date.now();
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const orderRef = `PP-RWX-${timestamp}-${randomSuffix}`;
@@ -458,9 +594,9 @@ export const SupabaseServerService = {
       const { data: rpcRes, error: rpcErr } = await client.rpc('reserve_tickets_atomic', {
         p_category: category,
         p_quantity: quantity,
-        p_buyer_name: buyerName.trim(),
-        p_buyer_email: buyerEmail.trim(),
-        p_buyer_phone: buyerPhone.trim(),
+        p_buyer_name: buyerName,
+        p_buyer_email: buyerEmail,
+        p_buyer_phone: buyerPhone,
         p_order_ref: orderRef,
         p_reserved_until: reservedUntil,
         p_network: network,
@@ -474,13 +610,13 @@ export const SupabaseServerService = {
             success: false,
             message: rpcRes.message || `Insufficient ${category} tickets available.`,
             error: 'INSUFFICIENT_INVENTORY',
+            retryable: false,
           };
         }
         reservedViaRpc = true;
       } else if (rpcErr && !isMissingRpcError(rpcErr)) {
-        // If public.orders doesn't exist yet inside the RPC, fall through to reserveTicketsDirect
         if (!isMissingRelationError(rpcErr, 'orders')) {
-          console.error('[Supabase reserve_tickets_atomic Error]', rpcErr.code, rpcErr.message);
+          console.error('[Supabase reserve_tickets_atomic Error]', rpcErr.code, sanitizeDiagnosticText(rpcErr.message));
           const classified = classifySchemaError(
             rpcErr,
             'Could not reserve tickets in the database. Please ensure the latest Supabase schema migration has been applied.'
@@ -489,11 +625,12 @@ export const SupabaseServerService = {
             success: false,
             message: classified.message,
             error: classified.error,
+            retryable: true,
           };
         }
       }
     } catch (rpcException: any) {
-      console.warn('[Supabase RPC Exception, falling back to direct reservation]', rpcException?.message);
+      console.warn('[Supabase RPC Exception, falling back to direct reservation]', sanitizeDiagnosticText(rpcException?.message));
     }
 
     if (!reservedViaRpc) {
@@ -514,27 +651,31 @@ export const SupabaseServerService = {
           success: false,
           message: directResult.message,
           error: directResult.error || 'DATABASE_ERROR',
+          retryable: directResult.error !== 'INSUFFICIENT_INVENTORY',
         };
       }
     }
 
-    // 2. Call Relworx Payments API to push mobile money prompt to customer phone
+    // 2. Call Relworx Payments API once (never retries a disabled API)
     const relworxRes = await RelworxService.requestPayment({
       reference: orderRef,
-      phone: buyerPhone.trim(),
+      phone: buyerPhone,
       amount: totalAmount,
       description: `Pool Party 2026 - ${quantity}x ${category} Pass`,
       category,
-      buyerName: buyerName.trim(),
+      buyerName,
     });
 
     if (!relworxRes.success) {
-      // Immediately release reservation if Relworx rejected or timed out
-      await this.releaseReservationByOrderRef(orderRef);
+      // Immediately release ticket reservation and mark order 'failed' so tickets are NEVER left reserved
+      await this.releaseReservationByOrderRef(orderRef, 'failed');
       return {
         success: false,
-        message: relworxRes.message || 'Mobile Money gateway could not initiate payment on this phone number.',
+        message: relworxRes.message || CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
         error: relworxRes.error || 'RELWORX_REQUEST_FAILED',
+        code: relworxRes.code,
+        retryable: relworxRes.retryable ?? true,
+        retryAfterSeconds: relworxRes.retryAfterSeconds,
       };
     }
 
@@ -550,8 +691,8 @@ export const SupabaseServerService = {
           .from('tickets')
           .update({ relworx_internal_ref: internalRef })
           .eq('order_ref', orderRef);
-      } catch (err) {
-        console.warn('Could not attach relworx_internal_ref to order/tickets:', err);
+      } catch {
+        console.warn('[Supabase] Could not attach relworx_internal_ref for order', orderRef);
       }
     }
 
@@ -564,6 +705,82 @@ export const SupabaseServerService = {
       totalAmountUgx: totalAmount,
       gateway: 'relworx',
     };
+  },
+
+  /**
+   * Checks if the same buyer already has a non-expired pending order for the same tier & quantity.
+   * Reuses an active live prompt instead of creating duplicate orders or pushing a second charge,
+   * and cleans up any uninitiated/failed stale reservation automatically.
+   */
+  async findReusableActivePendingOrder(
+    client: SupabaseClient,
+    params: {
+      buyerPhone: string;
+      msisdn: string;
+      localPhone: string;
+      category: 'VIP' | 'ORDINARY';
+      quantity: number;
+    }
+  ): Promise<InitiationResult | null> {
+    const nowIso = new Date().toISOString();
+    try {
+      const phoneCandidates = Array.from(new Set([params.buyerPhone, params.msisdn, params.localPhone]));
+      const { data: pendingOrders, error } = await client
+        .from('orders')
+        .select('*')
+        .eq('status', 'pending')
+        .eq('category', params.category)
+        .eq('quantity', params.quantity)
+        .in('buyer_phone', phoneCandidates)
+        .gt('reserved_until', nowIso)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error || !pendingOrders || pendingOrders.length === 0) {
+        return null;
+      }
+
+      const existing = pendingOrders[0];
+
+      // If no provider reference was ever recorded, this was an incomplete initiation — release it cleanly
+      if (!existing.relworx_internal_ref) {
+        await this.releaseReservationByOrderRef(existing.order_ref, 'failed');
+        return null;
+      }
+
+      // Verify with Relworx whether the earlier prompt is still pending or already failed
+      if (RelworxService.getDisabledCooldownRemainingSeconds() === 0) {
+        const statusCheck = await RelworxService.checkRequestStatus({
+          internalReference: existing.relworx_internal_ref,
+          reference: existing.order_ref,
+        });
+
+        if (statusCheck.status === 'failed') {
+          await this.releaseReservationByOrderRef(existing.order_ref, 'failed');
+          return null;
+        }
+
+        if (statusCheck.success && statusCheck.status === 'success') {
+          await this.markOrderAsPaid(existing.order_ref, {
+            relworx: statusCheck,
+            relworx_internal_ref: statusCheck.internal_reference,
+          });
+        }
+      }
+
+      return {
+        success: true,
+        orderRef: existing.order_ref,
+        message: 'Resuming your active Mobile Money payment request. Check your phone to approve.',
+        relworxInternalRef: existing.relworx_internal_ref,
+        reservedUntil: existing.reserved_until,
+        totalAmountUgx: existing.total_amount_ugx,
+        gateway: 'relworx',
+        reusedExistingOrder: true,
+      };
+    } catch {
+      return null;
+    }
   },
 
   /**
@@ -600,7 +817,7 @@ export const SupabaseServerService = {
         .limit(quantity);
 
       if (fetchErr) {
-        console.error('[Supabase reserveTicketsDirect fetchErr]', fetchErr.code, fetchErr.message);
+        console.error('[Supabase reserveTicketsDirect fetchErr]', fetchErr.code, sanitizeDiagnosticText(fetchErr.message));
         return {
           success: false,
           message: 'Unable to read available ticket inventory.',
@@ -634,7 +851,7 @@ export const SupabaseServerService = {
         .select('id');
 
       if (lockErr) {
-        console.error('[Supabase reserveTicketsDirect lockErr]', lockErr.code, lockErr.message);
+        console.error('[Supabase reserveTicketsDirect lockErr]', lockErr.code, sanitizeDiagnosticText(lockErr.message));
         const classified = classifySchemaError(
           lockErr,
           'Could not lock ticket reservation in database. Ensure order_ref and reserved_until exist on public.tickets.'
@@ -677,7 +894,7 @@ export const SupabaseServerService = {
             `[Supabase] public.orders table not found (${orderErr.code}); tracking reservation ${orderRef} via public.tickets.`
           );
         } else {
-          console.error('[Supabase orders insert error]', orderErr.code, orderErr.message);
+          console.error('[Supabase orders insert error]', orderErr.code, sanitizeDiagnosticText(orderErr.message));
           await this.releaseReservationByOrderRef(orderRef);
           const classified = classifySchemaError(
             orderErr,
@@ -693,7 +910,7 @@ export const SupabaseServerService = {
 
       return { success: true, message: 'Tickets reserved.' };
     } catch (err: any) {
-      console.error('[Supabase reserveTicketsDirect Exception]', err?.message || err);
+      console.error('[Supabase reserveTicketsDirect Exception]', sanitizeDiagnosticText(err?.message || ''));
       await this.releaseReservationByOrderRef(orderRef);
       return {
         success: false,
@@ -703,38 +920,102 @@ export const SupabaseServerService = {
     }
   },
 
+  resetDeduplicationStateForTests(): void {
+    _inFlightInitiations.clear();
+    _recentIdempotencyResults.clear();
+  },
+
   /**
-   * Release reservation when checkout is explicitly cancelled or declined
+   * Release reservation when checkout fails initiation, is cancelled, or is declined.
+   * Ensures reserved tickets are immediately returned to 'available' and order is marked 'failed'/'cancelled'.
    */
-  async releaseReservationByOrderRef(orderRef: string): Promise<boolean> {
+  async releaseReservationByOrderRef(
+    orderRef: string,
+    finalOrderStatus: 'cancelled' | 'failed' = 'cancelled'
+  ): Promise<boolean> {
+    // Purge any cached idempotency entry referencing this released orderRef
+    for (const [key, entry] of _recentIdempotencyResults.entries()) {
+      if (entry.result.orderRef === orderRef) {
+        _recentIdempotencyResults.delete(key);
+      }
+    }
+
     const { client } = getSupabaseClient();
-    if (!client) return false;
+    if (!client || !orderRef) return false;
+
+    const fullResetPayload = {
+      status: 'available',
+      payment_status: 'unpaid',
+      buyer_name: null,
+      buyer_email: null,
+      buyer_phone: null,
+      order_ref: null,
+      reserved_until: null,
+      relworx_internal_ref: null,
+    };
+
+    const minimalResetPayload = {
+      status: 'available',
+      payment_status: 'unpaid',
+      buyer_name: null,
+      buyer_email: null,
+      buyer_phone: null,
+      order_ref: null,
+      reserved_until: null,
+    };
 
     try {
-      await client
+      let { error: ticketErr } = await client
         .from('tickets')
-        .update({
-          status: 'available',
-          payment_status: 'unpaid',
-          buyer_name: null,
-          buyer_email: null,
-          buyer_phone: null,
-          order_ref: null,
-          reserved_until: null,
-          relworx_internal_ref: null,
-        })
+        .update(fullResetPayload)
         .eq('order_ref', orderRef)
         .eq('status', 'reserved');
 
-      await client
+      if (ticketErr && (ticketErr.code === 'PGRST204' || ticketErr.code === '42703')) {
+        const fallback = await client
+          .from('tickets')
+          .update(minimalResetPayload)
+          .eq('order_ref', orderRef)
+          .eq('status', 'reserved');
+        ticketErr = fallback.error;
+      } else if (ticketErr) {
+        // Retry once after brief pause on transient network/PostgREST error so tickets do not stay locked
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const retry = await client
+          .from('tickets')
+          .update(minimalResetPayload)
+          .eq('order_ref', orderRef)
+          .eq('status', 'reserved');
+        ticketErr = retry.error;
+      }
+
+      if (ticketErr) {
+        console.error('[Supabase] Ticket reservation release error:', {
+          orderRef,
+          code: ticketErr.code,
+          diagnostic: sanitizeDiagnosticText(ticketErr.message),
+        });
+      }
+
+      const { error: orderUpdateErr } = await client
         .from('orders')
-        .update({ status: 'cancelled' })
+        .update({ status: finalOrderStatus })
         .eq('order_ref', orderRef)
         .eq('status', 'pending');
 
-      return true;
-    } catch (err) {
-      console.error('Error releasing reservation in Supabase:', err);
+      if (orderUpdateErr && !isMissingRelationError(orderUpdateErr, 'orders')) {
+        console.warn('[Supabase] Order status release warning:', {
+          orderRef,
+          code: orderUpdateErr.code,
+        });
+      }
+
+      return !ticketErr;
+    } catch (err: any) {
+      console.error('[Supabase] Exception releasing reservation:', {
+        orderRef,
+        diagnostic: sanitizeDiagnosticText(err?.message || ''),
+      });
       return false;
     }
   },

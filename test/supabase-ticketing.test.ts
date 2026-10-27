@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import http from 'node:http';
 import { createExpressApp } from '../src/server/app.js';
 import { SupabaseServerService } from '../src/server/supabaseServer.js';
-import { RelworxService } from '../src/server/relworxService.js';
+import { RelworxService, sanitizeDiagnosticText } from '../src/server/relworxService.js';
 import { TicketService } from '../src/lib/ticketService.js';
 
 describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
@@ -436,5 +436,328 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       await stopServer();
     }
   });
+
+  it('11. RelworxService Explicitly Detects API_DISABLED & Enforces Cooldown Without Repeated Provider Calls', async () => {
+    const prevKey = process.env.RELWORX_API_KEY;
+    const prevAcct = process.env.RELWORX_ACCOUNT_NO;
+    process.env.RELWORX_API_KEY = 'test_relworx_key_123456';
+    process.env.RELWORX_ACCOUNT_NO = 'RELWORX_MERCHANT_99';
+    RelworxService.resetProviderStateForTests();
+
+    const originalFetch = globalThis.fetch;
+    let relworxFetchCount = 0;
+
+    globalThis.fetch = (async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.url || '');
+      if (url.startsWith('https://payments.relworx.com/')) {
+        relworxFetchCount++;
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error_code: 'API_DISABLED',
+            message: 'Mobile Money API access is disabled for this merchant account.',
+          }),
+          { status: 403, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const firstAttempt = await RelworxService.requestPayment({
+        reference: 'PP-RWX-1700000000001-1111',
+        phone: '0775198484',
+        amount: 20000,
+        description: 'Pool Party 2026 - 1x ORDINARY Pass',
+        category: 'ORDINARY',
+        buyerName: 'Joel Mukisa',
+      });
+
+      assert.strictEqual(firstAttempt.success, false);
+      assert.strictEqual(firstAttempt.error, 'PAYMENT_PROVIDER_UNAVAILABLE');
+      assert.strictEqual(firstAttempt.code, 'API_DISABLED');
+      assert.strictEqual(firstAttempt.retryable, true);
+      assert.ok((firstAttempt.retryAfterSeconds ?? 0) > 0);
+      assert.strictEqual(
+        firstAttempt.message.includes('merchant account'),
+        false,
+        'Customer message must be safe and not leak internal merchant account details'
+      );
+      assert.strictEqual(relworxFetchCount, 1);
+
+      // Immediate second call during cooldown must NOT call Relworx API again
+      const secondAttempt = await RelworxService.requestPayment({
+        reference: 'PP-RWX-1700000000002-2222',
+        phone: '0775198484',
+        amount: 20000,
+        description: 'Pool Party 2026 - 1x ORDINARY Pass',
+        category: 'ORDINARY',
+        buyerName: 'Joel Mukisa',
+      });
+
+      assert.strictEqual(secondAttempt.success, false);
+      assert.strictEqual(secondAttempt.code, 'API_DISABLED');
+      assert.strictEqual(relworxFetchCount, 1, 'Must NOT repeatedly call disabled Relworx API during cooldown');
+    } finally {
+      globalThis.fetch = originalFetch;
+      RelworxService.resetProviderStateForTests();
+      if (prevKey === undefined) delete process.env.RELWORX_API_KEY;
+      else process.env.RELWORX_API_KEY = prevKey;
+      if (prevAcct === undefined) delete process.env.RELWORX_ACCOUNT_NO;
+      else process.env.RELWORX_ACCOUNT_NO = prevAcct;
+    }
+  });
+
+  it('12. /api/payments/relworx-initiate Returns HTTP 503 on API_DISABLED, Releases Reserved Tickets Immediately, and Skips Reservation During Cooldown', async () => {
+    await startServer();
+
+    const prevEnv = {
+      SUPABASE_URL: process.env.SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      RELWORX_API_KEY: process.env.RELWORX_API_KEY,
+      RELWORX_ACCOUNT_NO: process.env.RELWORX_ACCOUNT_NO,
+    };
+
+    process.env.SUPABASE_URL = 'https://poolpartytest.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service_role_test_secret_token_abcdefghijklmnopqrstuvwxyz';
+    process.env.RELWORX_API_KEY = 'test_relworx_key_123456';
+    process.env.RELWORX_ACCOUNT_NO = 'RELWORX_MERCHANT_99';
+    RelworxService.resetProviderStateForTests();
+    SupabaseServerService.resetDeduplicationStateForTests();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.url || '');
+      if (url.startsWith('https://poolpartytest.supabase.co/rest/v1/rpc/')) {
+        return new Response(
+          JSON.stringify({ code: 'PGRST202', message: 'Could not find the function public.reserve_tickets_atomic' }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.startsWith('https://poolpartytest.supabase.co/')) {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const expiredMock = mock.method(SupabaseServerService, 'releaseExpiredReservations', async () => 0);
+    const reusableMock = mock.method(SupabaseServerService, 'findReusableActivePendingOrder', async () => null);
+    const reserveDirectMock = mock.method(SupabaseServerService, 'reserveTicketsDirect', async () => ({
+      success: true,
+      message: 'Tickets reserved.',
+    }));
+    const releaseOrderMock = mock.method(
+      SupabaseServerService,
+      'releaseReservationByOrderRef',
+      async (_orderRef: string, _status?: 'cancelled' | 'failed') => true
+    );
+    const requestPaymentMock = mock.method(RelworxService, 'requestPayment', async () => {
+      const retryAfterSeconds = RelworxService.markProviderDisabled(30_000);
+      return {
+        success: false,
+        message:
+          'Mobile Money payments are temporarily unavailable right now. You have not been charged, and your selected passes remain available. Please try again later.',
+        error: 'PAYMENT_PROVIDER_UNAVAILABLE',
+        code: 'API_DISABLED',
+        retryable: true,
+        retryAfterSeconds,
+      };
+    });
+
+    try {
+      const res1 = await fetch(`${baseUrl}/api/payments/relworx-initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'ORDINARY',
+          quantity: 2,
+          buyerName: 'Joel Mukisa',
+          buyerEmail: 'joel@example.ug',
+          buyerPhone: '0775 198 484',
+          network: 'MTN',
+          idempotencyKey: 'idem-key-attempt-11111',
+        }),
+      });
+
+      assert.strictEqual(res1.status, 503, 'Must return HTTP 503 (not HTTP 502) when provider API_DISABLED');
+      assert.ok(res1.headers.get('retry-after'), 'Must set Retry-After header');
+      const body1 = await res1.json();
+      assert.strictEqual(body1.success, false);
+      assert.strictEqual(body1.error, 'PAYMENT_PROVIDER_UNAVAILABLE');
+      assert.strictEqual(body1.code, 'API_DISABLED');
+      assert.strictEqual(body1.orderRef, undefined, 'Must not return active orderRef on failed initiation');
+      assert.strictEqual(body1.tickets, undefined, 'Must NEVER issue tickets on failed initiation');
+
+      assert.strictEqual(reserveDirectMock.mock.callCount(), 1);
+      assert.strictEqual(requestPaymentMock.mock.callCount(), 1);
+      assert.strictEqual(
+        releaseOrderMock.mock.callCount(),
+        1,
+        'Must immediately release reserved tickets when Relworx initiation fails'
+      );
+      assert.strictEqual(
+        releaseOrderMock.mock.calls[0].arguments[1],
+        'failed',
+        'Failed initiation must mark pending order as failed'
+      );
+
+      // Immediate second request during cooldown must NOT lock tickets or call Relworx again
+      const res2 = await fetch(`${baseUrl}/api/payments/relworx-initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'ORDINARY',
+          quantity: 2,
+          buyerName: 'Joel Mukisa',
+          buyerEmail: 'joel@example.ug',
+          buyerPhone: '0775 198 484',
+          network: 'MTN',
+          idempotencyKey: 'idem-key-attempt-22222',
+        }),
+      });
+
+      assert.strictEqual(res2.status, 503);
+      const body2 = await res2.json();
+      assert.strictEqual(body2.code, 'API_DISABLED');
+      assert.strictEqual(
+        reserveDirectMock.mock.callCount(),
+        1,
+        'Must NOT lock tickets in Supabase while provider API_DISABLED cooldown is active'
+      );
+      assert.strictEqual(
+        requestPaymentMock.mock.callCount(),
+        1,
+        'Must NOT repeatedly call Relworx during API_DISABLED cooldown'
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      expiredMock.mock.restore();
+      reusableMock.mock.restore();
+      reserveDirectMock.mock.restore();
+      releaseOrderMock.mock.restore();
+      requestPaymentMock.mock.restore();
+      RelworxService.resetProviderStateForTests();
+      SupabaseServerService.resetDeduplicationStateForTests();
+      for (const [k, v] of Object.entries(prevEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      await stopServer();
+    }
+  });
+
+  it('13. Idempotency & Duplicate Submission Protection Prevents Duplicate Orders and Duplicate Charges', async () => {
+    await startServer();
+
+    const prevEnv = {
+      SUPABASE_URL: process.env.SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      RELWORX_API_KEY: process.env.RELWORX_API_KEY,
+      RELWORX_ACCOUNT_NO: process.env.RELWORX_ACCOUNT_NO,
+    };
+
+    process.env.SUPABASE_URL = 'https://poolpartytest.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service_role_test_secret_token_abcdefghijklmnopqrstuvwxyz';
+    process.env.RELWORX_API_KEY = 'test_relworx_key_123456';
+    process.env.RELWORX_ACCOUNT_NO = 'RELWORX_MERCHANT_99';
+    RelworxService.resetProviderStateForTests();
+    SupabaseServerService.resetDeduplicationStateForTests();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.url || '');
+      if (url.startsWith('https://poolpartytest.supabase.co/rest/v1/rpc/')) {
+        return new Response(
+          JSON.stringify({ code: 'PGRST202', message: 'Could not find the function public.reserve_tickets_atomic' }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.startsWith('https://poolpartytest.supabase.co/')) {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const expiredMock = mock.method(SupabaseServerService, 'releaseExpiredReservations', async () => 0);
+    const reusableMock = mock.method(SupabaseServerService, 'findReusableActivePendingOrder', async () => null);
+    const reserveDirectMock = mock.method(SupabaseServerService, 'reserveTicketsDirect', async () => {
+      await new Promise((r) => setTimeout(r, 40));
+      return { success: true, message: 'Tickets reserved.' };
+    });
+    const requestPaymentMock = mock.method(RelworxService, 'requestPayment', async () => ({
+      success: true,
+      message: 'Payment prompt initiated. Check your phone to enter PIN.',
+      internal_reference: 'rwx_live_ref_001',
+    }));
+
+    try {
+      const payload = {
+        category: 'VIP',
+        quantity: 1,
+        buyerName: 'Grace Tumusiime',
+        buyerEmail: 'grace@example.ug',
+        buyerPhone: '0701234567',
+        network: 'AIRTEL',
+        idempotencyKey: 'idem-same-checkout-attempt-999',
+      };
+
+      // Concurrent duplicate clicks with the same idempotencyKey
+      const [r1, r2] = await Promise.all([
+        fetch(`${baseUrl}/api/payments/relworx-initiate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }),
+        fetch(`${baseUrl}/api/payments/relworx-initiate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }),
+      ]);
+
+      const [b1, b2] = await Promise.all([r1.json(), r2.json()]);
+      assert.strictEqual(r1.status, 200);
+      assert.strictEqual(r2.status, 200);
+      assert.strictEqual(b1.orderRef, b2.orderRef, 'Concurrent retries must coalesce to the exact same orderRef');
+      assert.strictEqual(reserveDirectMock.mock.callCount(), 1, 'Must reserve inventory only once');
+      assert.strictEqual(requestPaymentMock.mock.callCount(), 1, 'Must initiate Relworx charge only once');
+
+      // Sequential retry with the same idempotencyKey (e.g. client network retry)
+      const r3 = await fetch(`${baseUrl}/api/payments/relworx-initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const b3 = await r3.json();
+      assert.strictEqual(b3.orderRef, b1.orderRef, 'Sequential retry with same idempotencyKey must reuse orderRef');
+      assert.strictEqual(b3.reusedExistingOrder, true);
+      assert.strictEqual(requestPaymentMock.mock.callCount(), 1, 'Must never double-charge on idempotent retry');
+    } finally {
+      globalThis.fetch = originalFetch;
+      expiredMock.mock.restore();
+      reusableMock.mock.restore();
+      reserveDirectMock.mock.restore();
+      requestPaymentMock.mock.restore();
+      RelworxService.resetProviderStateForTests();
+      SupabaseServerService.resetDeduplicationStateForTests();
+      for (const [k, v] of Object.entries(prevEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      await stopServer();
+    }
+  });
+
+  it('14. Server Diagnostic Sanitizer Redacts Credentials, Account Numbers, Phones, and Emails', () => {
+    const raw =
+      'Error for Bearer sk_live_secret999 on account RELWORX_ACCT_778899 for +256 775 198 484 and joel@example.ug';
+    const sanitized = sanitizeDiagnosticText(raw);
+
+    assert.strictEqual(sanitized.includes('sk_live_secret999'), false, 'Must redact Bearer token');
+    assert.strictEqual(sanitized.includes('RELWORX_ACCT_778899'), false, 'Must redact Relworx account number');
+    assert.strictEqual(sanitized.includes('775 198 484'), false, 'Must redact buyer phone number');
+    assert.strictEqual(sanitized.includes('joel@example.ug'), false, 'Must redact buyer email');
+  });
 });
+
 

@@ -36,6 +36,7 @@ export interface InitiatePaymentPayload {
   buyerEmail: string;
   buyerPhone: string;
   network: PaymentNetwork;
+  idempotencyKey?: string;
 }
 
 export interface InitiatePaymentResponse {
@@ -53,6 +54,10 @@ export interface InitiatePaymentResponse {
   requiresAction?: boolean; // USSD prompt on user handset
   tickets?: TicketRecord[];
   error?: string;
+  code?: string;
+  retryable?: boolean;
+  retryAfterSeconds?: number;
+  reusedExistingOrder?: boolean;
 }
 
 export interface OrderStatusResponse {

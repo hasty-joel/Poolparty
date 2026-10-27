@@ -34,6 +34,14 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     paymentMethod: 'mtn_momo',
   });
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  const [providerUnavailableMsg, setProviderUnavailableMsg] = useState<string | null>(null);
+  const [retryCooldownSecs, setRetryCooldownSecs] = useState<number>(0);
+  const [hasFailedAttempt, setHasFailedAttempt] = useState<boolean>(false);
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(() =>
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `pp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [publicCounts, setPublicCounts] = useState<PublicInventoryCounts | null>(null);
   const [loadingCounts, setLoadingCounts] = useState(true);
@@ -52,6 +60,22 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
   // Ticket Lookup Modal State
   const [lookupOpen, setLookupOpen] = useState(false);
+
+  const rotateIdempotencyKey = () => {
+    setIdempotencyKey(
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `pp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    );
+  };
+
+  useEffect(() => {
+    if (retryCooldownSecs <= 0) return;
+    const timer = setInterval(() => {
+      setRetryCooldownSecs((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [retryCooldownSecs]);
 
   const refreshCounts = async () => {
     setLoadingCounts(true);
@@ -87,6 +111,8 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   const handleTierChange = (tier: TicketTier) => {
     setSelectedTier(tier);
     setForm((prev) => ({ ...prev, tier }));
+    rotateIdempotencyKey();
+    setProviderUnavailableMsg(null);
     setErrors((prev) => {
       const next = { ...prev };
       delete next.inventory;
@@ -106,6 +132,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
       remainingInventory !== null && remainingInventory > 0 ? Math.min(10, remainingInventory) : 10;
     if (next >= 1 && next <= maxAllowed) {
       setQuantity(next);
+      rotateIdempotencyKey();
     }
   };
 
@@ -143,11 +170,12 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (isSubmitting || retryCooldownSecs > 0) return;
     if (!validate()) return;
 
     setIsSubmitting(true);
     setErrors({});
+    setProviderUnavailableMsg(null);
 
     try {
       const res = await TicketService.initiateRelworxPayment({
@@ -157,22 +185,50 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         buyerEmail: form.email.trim(),
         buyerPhone: form.phone.trim(),
         network,
+        idempotencyKey,
       });
 
       if (!res.success || !res.orderRef) {
-        let msg = res.message || 'Payment initiation failed. Please try again.';
-        if (res.message?.includes('API disabled')) {
-          msg =
-            'Relworx Mobile Money API is currently disabled for this merchant account. Please enable API access in the Relworx dashboard to accept customer payments.';
+        setHasFailedAttempt(true);
+
+        // Rotate idempotencyKey ONLY when the server confirmed the reservation was released (not on uncertain network timeout)
+        if (res.error !== 'NETWORK_UNCERTAIN') {
+          rotateIdempotencyKey();
         }
-        setErrors({ inventory: msg });
+
+        const isProviderDisabledOrUnavailable =
+          res.code === 'API_DISABLED' ||
+          res.error === 'PAYMENT_PROVIDER_UNAVAILABLE' ||
+          res.error === 'RELWORX_NOT_CONFIGURED';
+
+        if (isProviderDisabledOrUnavailable) {
+          const safeUnavailableMessage =
+            'Mobile Money payments are temporarily unavailable right now. You have not been charged, and your selected passes remain available. Please try again later.';
+          setProviderUnavailableMsg(safeUnavailableMessage);
+          // Prevent rapid repeated calls against a disabled API while allowing retry after short pause
+          const cooldown = Math.min(Math.max(res.retryAfterSeconds || 15, 10), 30);
+          setRetryCooldownSecs(cooldown);
+          return;
+        }
+
+        if (res.error === 'RATE_LIMITED') {
+          setRetryCooldownSecs(Math.min(res.retryAfterSeconds || 30, 60));
+        }
+
+        setErrors({
+          inventory: res.message || 'Payment initiation failed. You have not been charged—please try again.',
+        });
         return;
       }
+
+      setHasFailedAttempt(false);
+      setProviderUnavailableMsg(null);
+      rotateIdempotencyKey();
 
       // Refresh stock counts from database in background
       void refreshCounts();
 
-      // Open Relworx checkout modal
+      // Open Relworx checkout modal ONLY when initiation genuinely succeeded with an orderRef
       setCheckoutModal({
         orderRef: res.orderRef,
         message: res.message,
@@ -183,6 +239,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
         network,
       });
     } catch {
+      setHasFailedAttempt(true);
       setErrors({
         inventory: 'Unable to submit your reservation right now. Please check your connection and try again.',
       });
@@ -322,7 +379,22 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
           </div>
         )}
 
-        {/* Global Inventory Alert if low */}
+        {/* Global Payment Temporarily Unavailable / Inventory Alert */}
+        {providerUnavailableMsg && (
+          <div
+            role="alert"
+            className="max-w-2xl mb-6 p-4 rounded-xl bg-amber-950/50 border border-amber-500/50 text-amber-100 text-xs flex items-start gap-2.5"
+          >
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold text-amber-300 block mb-0.5">
+                Mobile Money Payments Temporarily Unavailable
+              </span>
+              <span>{providerUnavailableMsg}</span>
+            </div>
+          </div>
+        )}
+
         {errors.inventory && (
           <div className="max-w-2xl mb-6 p-4 rounded-xl bg-rose-950/60 border border-rose-500 text-rose-200 text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
@@ -470,7 +542,10 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 <input
                   type="tel"
                   value={form.phone}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  onChange={(e) => {
+                    setForm({ ...form, phone: e.target.value });
+                    rotateIdempotencyKey();
+                  }}
                   placeholder="0775 198 484 or +256 701 234567"
                   className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
                     errors.phone ? 'border-rose-500' : 'border-white/15'
@@ -490,7 +565,12 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
-                    onClick={() => setNetwork('MTN')}
+                    onClick={() => {
+                      if (network !== 'MTN') {
+                        setNetwork('MTN');
+                        rotateIdempotencyKey();
+                      }
+                    }}
                     className={`p-3 rounded-xl border text-left cursor-pointer transition-colors flex items-center gap-3 ${
                       network === 'MTN'
                         ? 'bg-[#121c2e] border-amber-400 text-white'
@@ -508,7 +588,12 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
                   <button
                     type="button"
-                    onClick={() => setNetwork('AIRTEL')}
+                    onClick={() => {
+                      if (network !== 'AIRTEL') {
+                        setNetwork('AIRTEL');
+                        rotateIdempotencyKey();
+                      }
+                    }}
                     className={`p-3 rounded-xl border text-left cursor-pointer transition-colors flex items-center gap-3 ${
                       network === 'AIRTEL'
                         ? 'bg-[#121c2e] border-rose-400 text-white'
@@ -526,7 +611,22 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 </div>
               </div>
 
-              {/* Inline Submission / Inventory Error directly above Submit CTA */}
+              {/* Inline Provider Temporarily Unavailable / Submission Error directly above Submit CTA */}
+              {providerUnavailableMsg && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-xl bg-amber-950/50 border border-amber-500/60 text-amber-100 text-xs flex items-start gap-2.5"
+                >
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <span className="font-bold text-amber-300 block">
+                      Mobile Money Payments Temporarily Unavailable
+                    </span>
+                    <p className="text-amber-100/90 leading-relaxed">{providerUnavailableMsg}</p>
+                  </div>
+                </div>
+              )}
+
               {errors.inventory && (
                 <div
                   role="alert"
@@ -541,7 +641,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={isSubmitting || isTierSoldOut}
+                  disabled={isSubmitting || isTierSoldOut || retryCooldownSecs > 0}
                   className="w-full py-3.5 text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2 font-display"
                 >
                   {isSubmitting ? (
@@ -551,9 +651,14 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                     </div>
                   ) : isTierSoldOut ? (
                     <span>{selectedTier.toUpperCase()} Passes Sold Out</span>
+                  ) : retryCooldownSecs > 0 ? (
+                    <span>Payments Unavailable · Retry Available in {retryCooldownSecs}s</span>
                   ) : (
                     <>
-                      <span>Pay via {network} MoMo · UGX {totalPrice.toLocaleString()}</span>
+                      <span>
+                        {hasFailedAttempt ? 'Retry Payment via' : 'Pay via'} {network} MoMo · UGX{' '}
+                        {totalPrice.toLocaleString()}
+                      </span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
