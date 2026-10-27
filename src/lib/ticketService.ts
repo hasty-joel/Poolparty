@@ -421,7 +421,11 @@ export const TicketService = {
    * Marks order paid and generates active QR tokens
    * Calls secure backend endpoint /api/admin/mtn-verify (with fallback to /api/admin/verify-mtn-payment)
    */
-  async verifyMtnPaymentAdmin(orderRef: string, adminName: string = 'Admin', notes?: string): Promise<{ success: boolean; message: string }> {
+  async verifyMtnPaymentAdmin(
+    orderRef: string,
+    adminName: string = 'Admin',
+    notes?: string
+  ): Promise<{ success: boolean; message: string; orderRef?: string; tickets?: TicketRecord[] }> {
     let res = await fetchSafeJson<any>(
       '/api/admin/mtn-verify',
       {

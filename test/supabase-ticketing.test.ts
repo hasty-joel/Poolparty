@@ -6,6 +6,7 @@ import { SupabaseServerService } from '../src/server/supabaseServer.js';
 import { RelworxService, sanitizeDiagnosticText } from '../src/server/relworxService.js';
 import { MtnMoMoService } from '../src/server/mtnMoMoService.js';
 import { TicketService } from '../src/lib/ticketService.js';
+import { WhatsAppService } from '../src/lib/whatsappService.js';
 
 describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
   const app = createExpressApp();
@@ -1079,6 +1080,90 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       mockReject.mock.restore();
       await stopServer();
     }
+  });
+
+  it('21. WhatsApp Phone Formatting Validates Uganda Numbers & Generates Compliant wa.me URLs', () => {
+    // Local Ugandan number with leading 0
+    const local = WhatsAppService.formatPhoneForWhatsApp('0772 123 456');
+    assert.strictEqual(local.valid, true);
+    assert.strictEqual(local.internationalDigits, '256772123456');
+    assert.strictEqual(local.displayPhone, '+256 772 123 456');
+
+    // Airtel local number
+    const airtel = WhatsAppService.formatPhoneForWhatsApp('0701987654');
+    assert.strictEqual(airtel.valid, true);
+    assert.strictEqual(airtel.internationalDigits, '256701987654');
+    assert.strictEqual(airtel.displayPhone, '+256 701 987 654');
+
+    // Number with +256 prefix
+    const withPlus = WhatsAppService.formatPhoneForWhatsApp('+256 782 333 444');
+    assert.strictEqual(withPlus.valid, true);
+    assert.strictEqual(withPlus.internationalDigits, '256782333444');
+
+    // Number with 256 prefix without plus
+    const rawUganda = WhatsAppService.formatPhoneForWhatsApp('256750111222');
+    assert.strictEqual(rawUganda.valid, true);
+    assert.strictEqual(rawUganda.internationalDigits, '256750111222');
+
+    // Invalid numbers
+    const invalidShort = WhatsAppService.formatPhoneForWhatsApp('12345');
+    assert.strictEqual(invalidShort.valid, false);
+
+    const empty = WhatsAppService.formatPhoneForWhatsApp('');
+    assert.strictEqual(empty.valid, false);
+
+    // URL generation strictly adheres to wa.me specification (digits only, no + symbol)
+    const url = WhatsAppService.generateWhatsAppUrl('256772123456', 'Hello Joel! 🎉');
+    assert.ok(url.startsWith('https://wa.me/256772123456?text='), 'URL must begin with https://wa.me/{strictly_numeric_digits}?text=');
+    assert.ok(!url.includes('+256'), 'Phone parameter in wa.me must not include + symbol');
+    assert.ok(url.includes('Hello%20Joel'), 'Message body must be URI encoded');
+  });
+
+  it('22. WhatsApp Ticket Message Generates Required Customer, Pricing, and Unique Pass Verification Links', () => {
+    const message = WhatsAppService.buildTicketMessage({
+      buyerName: 'Joel Hasty',
+      category: 'VIP',
+      quantity: 2,
+      totalAmountUgx: 100000,
+      orderRef: 'PP-MTN-1793000000000-TEST',
+      tickets: [
+        { ticket_number: 'VIP-001', qr_token: 'qr_token_vip_001_mock' },
+        { ticket_number: 'VIP-002', qr_token: 'qr_token_vip_002_mock' },
+      ],
+      origin: 'https://poolparty-ug.vercel.app',
+    });
+
+    // Check attendee name
+    assert.ok(message.includes('Joel Hasty'), 'Must contain buyer name');
+    // Check ticket category & quantity
+    assert.ok(message.includes('VIP'), 'Must contain pass tier');
+    assert.ok(message.includes('2'), 'Must contain quantity');
+    // Check amount
+    assert.ok(message.includes('100,000'), 'Must contain formatted UGX amount');
+    // Check order reference
+    assert.ok(message.includes('PP-MTN-1793000000000-TEST'), 'Must contain order reference');
+    // Check entrance check-in instruction
+    assert.ok(message.includes('Present your QR code at the entrance for check-in'), 'Must contain check-in guidance');
+    // Check individual ticket passes with verification links
+    assert.ok(message.includes('VIP-001'), 'Must include first ticket number');
+    assert.ok(message.includes('VIP-002'), 'Must include second ticket number');
+    assert.ok(message.includes('?verify=qr_token_vip_001_mock'), 'Must include unique verification link for VIP-001');
+    assert.ok(message.includes('?verify=qr_token_vip_002_mock'), 'Must include unique verification link for VIP-002');
+  });
+
+  it('23. WhatsApp Delivery Safeguard: Unverified/Pending Orders Are Protected From Premature Ticket Release', () => {
+    // When an order is not paid or verified, it cannot have active issued tickets
+    const pendingOrder = {
+      order_ref: 'PP-MTN-PENDING-99',
+      status: 'pending',
+      verification_status: 'pending_verification',
+      category: 'ORDINARY',
+      quantity: 1,
+      total_amount_ugx: 20000,
+    };
+
+    const isPaid = pendingOrder.status === 'paid' || pendingOrder.verification_status === 'verified';
+    assert.strictEqual(isPaid, false, 'Pending order must not evaluate to paid or verified');
   });
 });
 

@@ -19,12 +19,14 @@ import {
   XCircle, 
   QrCode,
   Smartphone,
-  AlertCircle
+  AlertCircle,
+  MessageCircle
 } from 'lucide-react';
 import { TicketService } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
 import { TicketRecord, InventoryDashboardStats, TicketCategory } from '../../types/inventory';
 import { SUPABASE_CONFIG } from '../../lib/supabase';
+import { WhatsAppDeliveryModal } from './WhatsAppDeliveryModal';
 
 interface AdminDashboardProps {
   onBack: () => void;
@@ -71,6 +73,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [rejectReason, setRejectReason] = useState<string>('Transaction ID could not be confirmed on MTN MoMo merchant statement');
   const [isRejecting, setIsRejecting] = useState(false);
   const [copiedTxId, setCopiedTxId] = useState<string | null>(null);
+
+  // WhatsApp Ticket Delivery Modal
+  const [whatsAppModalData, setWhatsAppModalData] = useState<{
+    order: any;
+    tickets: TicketRecord[];
+    isNewlyVerified?: boolean;
+  } | null>(null);
 
   // Physical Sale Form
   const [saleCategory, setSaleCategory] = useState<TicketCategory>('ORDINARY');
@@ -154,6 +163,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleConfirmVerifyMtn = async () => {
     if (!verifyModalOrder) return;
     const orderRef = verifyModalOrder.order_ref;
+    const currentOrder = { ...verifyModalOrder };
     setVerifyingMtnOrderRef(orderRef);
     setActionError(null);
     setActionSuccess(null);
@@ -167,6 +177,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setActionSuccess(`Verified & Issued! Order ${orderRef} marked as PAID. Official QR passes activated.`);
         setVerifyModalOrder(null);
         await loadData();
+
+        // Automatically trigger WhatsApp ticket delivery modal for the verified buyer
+        const verifiedOrder = {
+          ...currentOrder,
+          status: 'paid',
+          verification_status: 'verified',
+          verified_at: new Date().toISOString(),
+          verified_by: 'Admin',
+        };
+
+        const issuedTickets = (res.tickets && res.tickets.length > 0)
+          ? res.tickets
+          : tickets.filter(
+              (t) => t.order_ref === orderRef || (currentOrder.buyer_phone && t.buyer_phone === currentOrder.buyer_phone)
+            );
+
+        setWhatsAppModalData({
+          order: verifiedOrder,
+          tickets: issuedTickets,
+          isNewlyVerified: true,
+        });
       } else {
         setActionError(res.message || 'MTN payment verification failed.');
       }
@@ -175,6 +206,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } finally {
       setVerifyingMtnOrderRef(null);
     }
+  };
+
+  const handleOpenWhatsAppModal = (ord: any) => {
+    const isPaid = ord.status === 'paid' || ord.verification_status === 'verified';
+    if (!isPaid) {
+      setActionError('Cannot send tickets on WhatsApp for unpaid, pending, or rejected orders.');
+      return;
+    }
+
+    const orderTickets = tickets.filter(
+      (t) =>
+        t.order_ref === ord.order_ref ||
+        (ord.buyer_phone && t.buyer_phone === ord.buyer_phone && t.status === 'issued')
+    );
+
+    setWhatsAppModalData({
+      order: ord,
+      tickets: orderTickets,
+      isNewlyVerified: false,
+    });
   };
 
   const handleConfirmRejectMtn = async () => {
@@ -1066,7 +1117,7 @@ notify pgrst, 'reload schema';`;
                           )}
 
                           {isVerified && (
-                            <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+                            <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/10">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1078,7 +1129,7 @@ notify pgrst, 'reload schema';`;
                                     setActionSuccess('Switched to Inventory tab to view passes.');
                                   }
                                 }}
-                                className="flex-1 py-2 px-3 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg cursor-pointer text-center min-h-[38px]"
+                                className="py-2 px-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg cursor-pointer text-center min-h-[38px] truncate"
                               >
                                 View Pass
                               </button>
@@ -1092,10 +1143,19 @@ notify pgrst, 'reload schema';`;
                                     setActionError('No ticket record found for reprint.');
                                   }
                                 }}
-                                className="py-2 px-3 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 text-xs font-bold rounded-lg flex items-center justify-center gap-1 cursor-pointer min-h-[38px]"
+                                className="py-2 px-1.5 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 text-xs font-bold rounded-lg flex items-center justify-center gap-1 cursor-pointer min-h-[38px]"
                               >
-                                <Printer className="w-3.5 h-3.5" />
+                                <Printer className="w-3.5 h-3.5 shrink-0" />
                                 <span>PDF</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenWhatsAppModal(ord)}
+                                className="py-2 px-1.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-black rounded-lg flex items-center justify-center gap-1 cursor-pointer min-h-[38px] transition-all"
+                                title="Send ticket via WhatsApp"
+                              >
+                                <MessageCircle className="w-3.5 h-3.5 shrink-0 text-slate-950" />
+                                <span>WhatsApp</span>
                               </button>
                             </div>
                           )}
@@ -1293,6 +1353,16 @@ notify pgrst, 'reload schema';`;
                                     >
                                       <Printer className="w-3 h-3" />
                                       <span>Reprint</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenWhatsAppModal(ord)}
+                                      className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-slate-950 font-black text-[11px] rounded flex items-center gap-1 cursor-pointer transition-all shrink-0 whitespace-nowrap min-h-[34px]"
+                                      title="Send official ticket and QR code to attendee via WhatsApp"
+                                    >
+                                      <MessageCircle className="w-3 h-3 text-slate-950" />
+                                      <span>WhatsApp</span>
                                     </button>
                                   </>
                                 )}
@@ -1848,20 +1918,30 @@ notify pgrst, 'reload schema';`;
                               )}
 
                               {isPaid && (
-                                <button
-                                  onClick={async () => {
-                                    const tList = tickets.filter((t) => t.order_ref === ord.order_ref);
-                                    if (tList.length > 0) {
-                                      onViewTicket(tList[0]);
-                                    } else {
-                                      setActiveTab('inventory');
-                                      setActionSuccess('Switched to Inventory tab to view tickets for this order.');
-                                    }
-                                  }}
-                                  className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 text-[11px] font-bold rounded-lg cursor-pointer"
-                                >
-                                  View Passes
-                                </button>
+                                <>
+                                  <button
+                                    onClick={async () => {
+                                      const tList = tickets.filter((t) => t.order_ref === ord.order_ref);
+                                      if (tList.length > 0) {
+                                        onViewTicket(tList[0]);
+                                      } else {
+                                        setActiveTab('inventory');
+                                        setActionSuccess('Switched to Inventory tab to view tickets for this order.');
+                                      }
+                                    }}
+                                    className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 text-[11px] font-bold rounded-lg cursor-pointer"
+                                  >
+                                    View Passes
+                                  </button>
+                                  <button
+                                    onClick={() => handleOpenWhatsAppModal(ord)}
+                                    className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[11px] font-black rounded-lg cursor-pointer flex items-center gap-1 transition-colors"
+                                    title="Send ticket link and QR code via WhatsApp"
+                                  >
+                                    <MessageCircle className="w-3 h-3 text-slate-950" />
+                                    <span>WhatsApp</span>
+                                  </button>
+                                </>
                               )}
                             </div>
                           </td>
@@ -2064,6 +2144,16 @@ VITE_SUPABASE_ANON_KEY=eyJhbGciOi...`}
               </div>
             </div>
           </div>
+        )}
+
+        {/* WhatsApp Ticket Delivery Modal */}
+        {whatsAppModalData && (
+          <WhatsAppDeliveryModal
+            order={whatsAppModalData.order}
+            tickets={whatsAppModalData.tickets}
+            isNewlyVerified={whatsAppModalData.isNewlyVerified}
+            onClose={() => setWhatsAppModalData(null)}
+          />
         )}
 
       </div>

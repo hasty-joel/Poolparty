@@ -776,7 +776,7 @@ export const SupabaseServerService = {
     orderRef: string;
     adminName?: string;
     notes?: string;
-  }): Promise<{ success: boolean; message: string; error?: string }> {
+  }): Promise<{ success: boolean; message: string; orderRef?: string; tickets?: TicketRow[]; error?: string }> {
     const { orderRef, adminName = 'Admin' } = params;
 
     const { client, configError } = getSupabaseClient();
@@ -807,6 +807,22 @@ export const SupabaseServerService = {
         .select('*')
         .eq('order_ref', orderRef)
         .maybeSingle();
+
+      // Prevent duplicate ticket issuance if order is already verified and paid
+      if (order && order.status === 'paid') {
+        const { data: alreadyIssued } = await client
+          .from('tickets')
+          .select('*')
+          .eq('order_ref', orderRef)
+          .eq('status', 'issued');
+
+        return {
+          success: true,
+          orderRef,
+          tickets: (alreadyIssued as TicketRow[]) || [],
+          message: `Order ${orderRef} is already verified and paid. Official QR tickets are active.`,
+        };
+      }
 
       const txId = order?.mtn_transaction_id || null;
 
@@ -860,8 +876,17 @@ export const SupabaseServerService = {
         return { success: false, message: 'Failed to update ticket records to issued in database.' };
       }
 
+      // Fetch the activated tickets with their unique ticket_number and qr_token
+      const { data: issuedTickets } = await client
+        .from('tickets')
+        .select('*')
+        .eq('order_ref', orderRef)
+        .eq('status', 'issued');
+
       return {
         success: true,
+        orderRef,
+        tickets: (issuedTickets as TicketRow[]) || [],
         message: `MTN payment verified for Order ${orderRef}. Official QR tickets have been activated and issued.`,
       };
     } catch (err: any) {
