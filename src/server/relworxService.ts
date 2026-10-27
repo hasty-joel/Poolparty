@@ -522,23 +522,38 @@ export const RelworxService = {
     }
   },
 
-  /**
-   * Verify HMAC-SHA256 signature from Relworx webhook
-   * Protects against replay attacks and verifies authenticity
-   */
-  verifyWebhookSignature(signatureHeader: string | undefined, payloadBody: any): boolean {
+  isWebhookConfigured(): boolean {
     const secret = this.getWebhookSecret();
-    if (!secret) {
-      console.warn('[Relworx Webhook] RELWORX_WEBHOOK_SECRET not set in environment.');
-      return true;
+    return Boolean(secret && secret.length >= 12);
+  },
+
+  /**
+   * Verify HMAC-SHA256 signature from Relworx webhook.
+   * Fails closed whenever RELWORX_WEBHOOK_SECRET is missing or too short.
+   */
+  verifyWebhookSignature(
+    signatureHeader: string | undefined,
+    payloadBody: any,
+    rawBody?: string | Buffer
+  ): boolean {
+    const secret = this.getWebhookSecret();
+    if (!secret || secret.length < 12) {
+      return false;
     }
 
-    if (!signatureHeader) {
+    if (!signatureHeader || typeof signatureHeader !== 'string' || !signatureHeader.trim()) {
       return false;
     }
 
     try {
-      const bodyString = typeof payloadBody === 'string' ? payloadBody : JSON.stringify(payloadBody);
+      const bodyString =
+        typeof rawBody === 'string'
+          ? rawBody
+          : Buffer.isBuffer(rawBody)
+          ? rawBody.toString('utf8')
+          : typeof payloadBody === 'string'
+          ? payloadBody
+          : JSON.stringify(payloadBody ?? {});
 
       let signatureHash = signatureHeader.trim();
       let timestamp: number | null = null;
@@ -549,13 +564,16 @@ export const RelworxService = {
           const [k, v] = part.split('=').map((s) => s.trim());
           if (k === 't' && v) {
             timestamp = parseInt(v, 10);
-          } else if ((k === 'v1' || k === 'signature') && v) {
+          } else if ((k === 'v1' || k === 'signature' || k === 'sha256') && v) {
             signatureHash = v;
           }
         }
       }
 
-      if (timestamp && !isNaN(timestamp)) {
+      if (timestamp !== null) {
+        if (!Number.isFinite(timestamp)) {
+          return false;
+        }
         const ageSec = Math.abs(Math.floor(Date.now() / 1000) - timestamp);
         if (ageSec > 900) {
           console.warn(`[Relworx Webhook] Expired timestamp signature (${ageSec}s old).`);
@@ -563,10 +581,13 @@ export const RelworxService = {
         }
       }
 
-      const computedHash = crypto.createHmac('sha256', secret).update(bodyString).digest('hex');
+      if (!/^[a-fA-F0-9]{64}$/.test(signatureHash)) {
+        return false;
+      }
 
-      const sigBuf = Buffer.from(signatureHash.toLowerCase(), 'utf-8');
-      const compBuf = Buffer.from(computedHash.toLowerCase(), 'utf-8');
+      const computedHex = crypto.createHmac('sha256', secret).update(bodyString, 'utf8').digest('hex');
+      const sigBuf = Buffer.from(signatureHash.toLowerCase(), 'hex');
+      const compBuf = Buffer.from(computedHex.toLowerCase(), 'hex');
 
       if (sigBuf.length !== compBuf.length) {
         return false;

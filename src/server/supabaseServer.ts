@@ -6,6 +6,7 @@ import {
   sanitizeDiagnosticText,
 } from './relworxService.js';
 import { MtnMoMoService } from './mtnMoMoService.js';
+import { safeCompareSecret } from './gateSecurity.js';
 import type { OrderRecord, OrderStatus, PaymentNetwork, VerificationStatus } from '../types/order.js';
 
 dotenv.config();
@@ -152,6 +153,11 @@ export interface TicketRow {
   created_at: string;
   paid_at: string | null;
   checked_in_at: string | null;
+  ticket_channel?: 'online' | 'hardcopy';
+  assigned_agent?: string | null;
+  activated_by?: string | null;
+  activated_at?: string | null;
+  hardcopy_batch_ref?: string | null;
   order_ref?: string | null;
   reserved_until?: string | null;
   mtn_transaction_id?: string | null;
@@ -159,7 +165,460 @@ export interface TicketRow {
   flw_transaction_id?: string | null;
 }
 
+export interface HardcopyAuditRow {
+  id: string;
+  batch_ref: string;
+  action: 'activate_single' | 'activate_range' | 'deactivate_return' | 'void_cancel';
+  category: 'VIP' | 'ORDINARY';
+  ticket_numbers: string[];
+  quantity: number;
+  unit_price_ugx: number;
+  total_amount_ugx: number;
+  agent_or_seller: string;
+  buyer_name: string | null;
+  buyer_phone: string | null;
+  performed_by: string;
+  notes: string | null;
+  created_at: string;
+}
+
 export type OrderRow = OrderRecord;
+
+export interface PublicLookupTicketSummary {
+  ticket_number: string;
+  category: 'VIP' | 'ORDINARY';
+  price_ugx: number;
+  status: 'issued';
+  payment_status: 'paid' | 'manual_paid';
+  buyer_name: string | null;
+  order_ref: string | null;
+  paid_at: string | null;
+  checked_in_at: string | null;
+}
+
+const UUID_STRICT_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TICKET_NUMBER_STRICT_REGEX = /^(VIP|ORD)-(\d{3,4})$/i;
+export const ORDER_REF_STRICT_REGEX = /^PP-(?:MTN|RWX|MOMO|BOX|FLW)-[A-Z0-9-]{4,64}$/i;
+const EMAIL_STRICT_REGEX = /^[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,190}\.[A-Z]{2,24}$/i;
+
+export function normalizeStrictOrderRef(raw: string): { valid: boolean; orderRef: string } {
+  const trimmed = String(raw || '').trim();
+  if (!ORDER_REF_STRICT_REGEX.test(trimmed)) {
+    return { valid: false, orderRef: '' };
+  }
+  return { valid: true, orderRef: trimmed.toUpperCase() };
+}
+
+export const HARDCOPY_RANGES = {
+  ORDINARY: { min: 51, max: 250, prefix: 'ORD', unitPriceUgx: 20000 },
+  VIP: { min: 21, max: 120, prefix: 'VIP', unitPriceUgx: 50000 },
+} as const;
+
+export const ONLINE_RANGES = {
+  ORDINARY: { min: 1, max: 50, prefix: 'ORD', unitPriceUgx: 20000 },
+  VIP: { min: 1, max: 20, prefix: 'VIP', unitPriceUgx: 50000 },
+} as const;
+
+/**
+ * Extracts raw token/ticket code even if a full `?verify=<token>` URL was scanned or pasted.
+ */
+export function extractVerificationInput(raw: string): string {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('verify=')) {
+    const match = trimmed.match(/[?&]verify=([^&#\s]+)/i) || trimmed.match(/verify=([^&#\s]+)/i);
+    if (match && match[1]) {
+      try {
+        return decodeURIComponent(match[1]).trim();
+      } catch {
+        return match[1].trim();
+      }
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Determines ticket channel from canonical ticket_number boundaries:
+ * - Online:   VIP-001..VIP-020 (20), ORD-001..ORD-050 (50)
+ * - Hardcopy: VIP-021..VIP-120 (100), ORD-051..ORD-250 (200)
+ */
+export function inferTicketChannelFromNumber(ticketNumber: string): 'online' | 'hardcopy' {
+  const match = String(ticketNumber || '').trim().toUpperCase().match(TICKET_NUMBER_STRICT_REGEX);
+  if (!match) return 'online';
+  const prefix = match[1] as 'VIP' | 'ORD';
+  const num = parseInt(match[2], 10);
+  if (prefix === 'VIP') {
+    return num >= HARDCOPY_RANGES.VIP.min ? 'hardcopy' : 'online';
+  }
+  return num >= HARDCOPY_RANGES.ORDINARY.min ? 'hardcopy' : 'online';
+}
+
+/**
+ * Defense-in-depth predicate ensuring hardcopy tickets are NEVER treated as online inventory.
+ */
+export function isOnlineTicketRow(row: {
+  ticket_number?: string | null;
+  ticket_channel?: string | null;
+}): boolean {
+  if (row.ticket_channel === 'hardcopy') return false;
+  if (row.ticket_number && inferTicketChannelFromNumber(row.ticket_number) === 'hardcopy') {
+    return false;
+  }
+  return true;
+}
+
+function parseSingleTicketCode(raw: string): {
+  valid: boolean;
+  category?: 'VIP' | 'ORDINARY';
+  num?: number;
+  formatted?: string;
+} {
+  const match = String(raw || '').trim().toUpperCase().match(TICKET_NUMBER_STRICT_REGEX);
+  if (!match) return { valid: false };
+  const prefix = match[1] as 'VIP' | 'ORD';
+  const num = parseInt(match[2], 10);
+  if (!Number.isInteger(num) || num < 1) return { valid: false };
+  const category = prefix === 'VIP' ? 'VIP' : 'ORDINARY';
+  return {
+    valid: true,
+    category,
+    num,
+    formatted: `${prefix}-${String(num).padStart(3, '0')}`,
+  };
+}
+
+export function sanitizeCheckInTicket(raw: Partial<TicketRow> | undefined | null): TicketRow | undefined {
+  if (!raw || !raw.id || !raw.ticket_number || !raw.category) return undefined;
+  const channel: 'online' | 'hardcopy' =
+    raw.ticket_channel === 'hardcopy' || inferTicketChannelFromNumber(raw.ticket_number) === 'hardcopy'
+      ? 'hardcopy'
+      : 'online';
+
+  return {
+    id: raw.id,
+    ticket_number: raw.ticket_number,
+    category: raw.category,
+    price_ugx: Number(raw.price_ugx || 0),
+    status: (raw.status as TicketRow['status']) || 'available',
+    payment_status: (raw.payment_status as TicketRow['payment_status']) || 'unpaid',
+    buyer_name: raw.status === 'issued' ? (raw.buyer_name || null) : null,
+    buyer_email: null,
+    buyer_phone: null,
+    qr_token: '[REDACTED]',
+    created_at: raw.created_at || '',
+    paid_at: raw.paid_at || null,
+    checked_in_at: raw.checked_in_at || null,
+    ticket_channel: channel,
+  };
+}
+
+export function parseHardcopySelection(params: {
+  ticketNumber?: string;
+  ticketNumbers?: string[];
+  category?: string;
+  startNumber?: string | number;
+  endNumber?: string | number;
+}): {
+  valid: boolean;
+  category?: 'VIP' | 'ORDINARY';
+  ticketNumbers?: string[];
+  isRange?: boolean;
+  error?: string;
+  message?: string;
+  conflictingTickets?: string[];
+} {
+  if (params.category !== undefined && params.category !== null && String(params.category).trim() !== '') {
+    const normalizedCat = String(params.category).trim().toUpperCase();
+    if (normalizedCat !== 'VIP' && normalizedCat !== 'ORDINARY') {
+      return {
+        valid: false,
+        error: 'VALIDATION_ERROR',
+        message: 'Invalid category. Must be VIP or ORDINARY.',
+      };
+    }
+  }
+
+  const hasSingle =
+    params.ticketNumber !== undefined && params.ticketNumber !== null && String(params.ticketNumber).trim() !== '';
+  const hasList = Array.isArray(params.ticketNumbers);
+  const hasRange = params.startNumber !== undefined || params.endNumber !== undefined;
+
+  const modeCount = Number(hasSingle) + Number(hasList) + Number(hasRange);
+  if (modeCount > 1) {
+    return {
+      valid: false,
+      error: 'VALIDATION_ERROR',
+      message: 'Provide only one selection mode: ticketNumber (single), ticketNumbers (batch list), OR startNumber/endNumber (range).',
+    };
+  }
+
+  // Mode A: Explicit batch list (validates duplicates, format, category, and hardcopy bounds)
+  if (hasList) {
+    const rawList = params.ticketNumbers!;
+    if (rawList.length < 1 || rawList.length > 200) {
+      return {
+        valid: false,
+        error: 'VALIDATION_ERROR',
+        message: 'ticketNumbers batch must contain between 1 and 200 tickets.',
+      };
+    }
+
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    const formattedList: string[] = [];
+    let resolvedCategory: 'VIP' | 'ORDINARY' | undefined =
+      params.category && String(params.category).trim()
+        ? (String(params.category).trim().toUpperCase() as 'VIP' | 'ORDINARY')
+        : undefined;
+
+    for (const item of rawList) {
+      if (typeof item !== 'string' || !item.trim()) {
+        return {
+          valid: false,
+          error: 'VALIDATION_ERROR',
+          message: 'ticketNumbers batch cannot contain null or blank entries.',
+        };
+      }
+
+      const parsed = parseSingleTicketCode(item);
+      if (!parsed.valid || !parsed.category || parsed.num === undefined || !parsed.formatted) {
+        return {
+          valid: false,
+          error: 'VALIDATION_ERROR',
+          message: `Invalid ticket number "${String(item).trim()}". Expected ORD-051..ORD-250 or VIP-021..VIP-120.`,
+        };
+      }
+
+      if (seen.has(parsed.formatted)) {
+        duplicates.add(parsed.formatted);
+      }
+      seen.add(parsed.formatted);
+
+      if (resolvedCategory && parsed.category !== resolvedCategory) {
+        return {
+          valid: false,
+          error: 'CATEGORY_MISMATCH',
+          message: `Ticket ${parsed.formatted} does not match category ${resolvedCategory}.`,
+          conflictingTickets: [parsed.formatted],
+        };
+      }
+      resolvedCategory = resolvedCategory || parsed.category;
+
+      const bounds = HARDCOPY_RANGES[parsed.category];
+      const onlineBounds = ONLINE_RANGES[parsed.category];
+      if (parsed.num >= onlineBounds.min && parsed.num <= onlineBounds.max) {
+        return {
+          valid: false,
+          error: 'ONLINE_TICKET_FORBIDDEN',
+          message: `${parsed.formatted} belongs to the online ticket pool and cannot be managed as a hardcopy ticket.`,
+          conflictingTickets: [parsed.formatted],
+        };
+      }
+      if (parsed.num < bounds.min || parsed.num > bounds.max) {
+        return {
+          valid: false,
+          error: 'OUT_OF_HARDCOPY_RANGE',
+          message: `Hardcopy ${parsed.category} tickets must be within ${bounds.prefix}-${String(bounds.min).padStart(3, '0')} to ${bounds.prefix}-${String(bounds.max).padStart(3, '0')}.`,
+          conflictingTickets: [parsed.formatted],
+        };
+      }
+
+      formattedList.push(parsed.formatted);
+    }
+
+    if (duplicates.size > 0) {
+      return {
+        valid: false,
+        error: 'DUPLICATE_TICKET_NUMBERS',
+        message: 'Duplicate ticket numbers are not permitted in a batch.',
+        conflictingTickets: Array.from(duplicates).sort(),
+      };
+    }
+
+    formattedList.sort();
+    return {
+      valid: true,
+      category: resolvedCategory!,
+      ticketNumbers: formattedList,
+      isRange: formattedList.length > 1,
+    };
+  }
+
+  // Mode B: Single ticket activation/update
+  if (hasSingle) {
+    const parsed = parseSingleTicketCode(String(params.ticketNumber));
+    if (!parsed.valid || !parsed.category || parsed.num === undefined || !parsed.formatted) {
+      return {
+        valid: false,
+        error: 'VALIDATION_ERROR',
+        message: 'Invalid ticket number format. Expected ORD-051..ORD-250 or VIP-021..VIP-120.',
+      };
+    }
+
+    if (params.category && String(params.category).trim().toUpperCase() !== parsed.category) {
+      return {
+        valid: false,
+        error: 'CATEGORY_MISMATCH',
+        message: `Ticket ${parsed.formatted} does not match category ${params.category}.`,
+      };
+    }
+
+    const bounds = HARDCOPY_RANGES[parsed.category];
+    const onlineBounds = ONLINE_RANGES[parsed.category];
+    if (parsed.num >= onlineBounds.min && parsed.num <= onlineBounds.max) {
+      return {
+        valid: false,
+        error: 'ONLINE_TICKET_FORBIDDEN',
+        message: `${parsed.formatted} belongs to the online ticket pool (${onlineBounds.prefix}-001 to ${onlineBounds.prefix}-${String(onlineBounds.max).padStart(3, '0')}) and cannot be managed as a hardcopy ticket.`,
+      };
+    }
+
+    if (parsed.num < bounds.min || parsed.num > bounds.max) {
+      return {
+        valid: false,
+        error: 'OUT_OF_HARDCOPY_RANGE',
+        message: `Hardcopy ${parsed.category} tickets must be within ${bounds.prefix}-${String(bounds.min).padStart(3, '0')} to ${bounds.prefix}-${String(bounds.max).padStart(3, '0')}.`,
+      };
+    }
+
+    return {
+      valid: true,
+      category: parsed.category,
+      ticketNumbers: [parsed.formatted],
+      isRange: false,
+    };
+  }
+
+  // Mode C: Range activation/update
+  if (params.startNumber === undefined || params.endNumber === undefined) {
+    return {
+      valid: false,
+      error: 'VALIDATION_ERROR',
+      message: 'Provide ticketNumber (single), ticketNumbers (batch), or startNumber and endNumber (range).',
+    };
+  }
+
+  const normalizedCatParam = params.category ? String(params.category).trim().toUpperCase() : '';
+  let resolvedCategory: 'VIP' | 'ORDINARY' | undefined =
+    normalizedCatParam === 'VIP' || normalizedCatParam === 'ORDINARY'
+      ? normalizedCatParam
+      : undefined;
+
+  const parseEndpoint = (val: string | number): { num?: number; category?: 'VIP' | 'ORDINARY' } => {
+    if (typeof val === 'number' && Number.isInteger(val)) {
+      return { num: val };
+    }
+    const str = String(val).trim().toUpperCase();
+    if (/^\d{1,4}$/.test(str)) {
+      return { num: parseInt(str, 10) };
+    }
+    const code = parseSingleTicketCode(str);
+    if (!code.valid) return {};
+    return { num: code.num, category: code.category };
+  };
+
+  const startParsed = parseEndpoint(params.startNumber);
+  const endParsed = parseEndpoint(params.endNumber);
+
+  if (startParsed.num === undefined || endParsed.num === undefined) {
+    return {
+      valid: false,
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid startNumber or endNumber format.',
+    };
+  }
+
+  if (startParsed.category && endParsed.category && startParsed.category !== endParsed.category) {
+    return {
+      valid: false,
+      error: 'CATEGORY_MISMATCH',
+      message: 'Start and end ticket numbers must belong to the same pass category (VIP or ORDINARY).',
+    };
+  }
+
+  const inferredCat = startParsed.category || endParsed.category;
+  if (resolvedCategory && inferredCat && resolvedCategory !== inferredCat) {
+    return {
+      valid: false,
+      error: 'CATEGORY_MISMATCH',
+      message: `Ticket range prefix (${inferredCat}) does not match category (${resolvedCategory}).`,
+    };
+  }
+
+  resolvedCategory = resolvedCategory || inferredCat;
+  if (!resolvedCategory) {
+    return {
+      valid: false,
+      error: 'VALIDATION_ERROR',
+      message: 'category (VIP or ORDINARY) is required when specifying numeric startNumber/endNumber.',
+    };
+  }
+
+  if (startParsed.num > endParsed.num) {
+    return {
+      valid: false,
+      error: 'VALIDATION_ERROR',
+      message: 'startNumber must be less than or equal to endNumber.',
+    };
+  }
+
+  const bounds = HARDCOPY_RANGES[resolvedCategory];
+  const onlineBounds = ONLINE_RANGES[resolvedCategory];
+
+  if (startParsed.num <= onlineBounds.max) {
+    return {
+      valid: false,
+      error: 'ONLINE_TICKET_FORBIDDEN',
+      message: `${bounds.prefix}-001 to ${bounds.prefix}-${String(onlineBounds.max).padStart(3, '0')} belong to the online ticket pool and cannot be activated as hardcopy tickets.`,
+    };
+  }
+
+  if (startParsed.num < bounds.min || endParsed.num > bounds.max) {
+    return {
+      valid: false,
+      error: 'OUT_OF_HARDCOPY_RANGE',
+      message: `Hardcopy ${resolvedCategory} range must stay within ${bounds.prefix}-${String(bounds.min).padStart(3, '0')} to ${bounds.prefix}-${String(bounds.max).padStart(3, '0')}.`,
+    };
+  }
+
+  const ticketNumbers: string[] = [];
+  for (let n = startParsed.num; n <= endParsed.num; n++) {
+    ticketNumbers.push(`${bounds.prefix}-${String(n).padStart(3, '0')}`);
+  }
+
+  return {
+    valid: true,
+    category: resolvedCategory,
+    ticketNumbers,
+    isRange: ticketNumbers.length > 1,
+  };
+}
+
+function isMissingColumnError(err: any, columnName?: string): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  const isMissingCol =
+    code === 'PGRST204' ||
+    code === '42703' ||
+    (msg.includes('column') && (msg.includes('does not exist') || msg.includes('schema cache')));
+  if (!isMissingCol) return false;
+  if (!columnName) return true;
+  return msg.includes(columnName.toLowerCase());
+}
+
+// Serializes in-process check-in & hardcopy activation mutations for deterministic concurrency safety
+const _inFlightTicketCheckIns = new Set<string>();
+let _hardcopyMutationChain: Promise<any> = Promise.resolve();
+
+function runSerializedHardcopyMutation<T>(fn: () => Promise<T>): Promise<T> {
+  const next = _hardcopyMutationChain.then(fn, fn);
+  _hardcopyMutationChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
 
 function isMissingRpcError(err: any): boolean {
   const code = String(err?.code || '');
@@ -222,6 +681,8 @@ export const SupabaseServerService = {
     count: number;
     ticketsSchemaReady?: boolean;
     ordersTableReady?: boolean;
+    ticketChannelReady?: boolean;
+    hardcopyAuditTableReady?: boolean;
     schemaWarning?: string;
     error?: string;
   }> {
@@ -248,13 +709,25 @@ export const SupabaseServerService = {
         .select('id, order_ref, reserved_until, relworx_internal_ref')
         .limit(1);
 
+      const { error: channelColErr } = await client
+        .from('tickets')
+        .select('id, ticket_channel')
+        .limit(1);
+
       const { error: ordersErr } = await client
         .from('orders')
         .select('id, order_ref, status')
         .limit(1);
 
+      const { error: auditErr } = await client
+        .from('hardcopy_audit_logs')
+        .select('id')
+        .limit(1);
+
       const ticketsSchemaReady = !ticketColsErr;
       const ordersTableReady = !ordersErr;
+      const ticketChannelReady = !channelColErr;
+      const hardcopyAuditTableReady = !auditErr;
       const warnings: string[] = [];
 
       if (!ticketsSchemaReady) {
@@ -263,12 +736,17 @@ export const SupabaseServerService = {
       if (!ordersTableReady) {
         warnings.push('public.orders table is not created yet (falling back to public.tickets reservation tracking).');
       }
+      if (!ticketChannelReady || !hardcopyAuditTableReady) {
+        warnings.push('Stage 1 hardcopy migration (ticket_channel / hardcopy_audit_logs) has not been applied yet.');
+      }
 
       return {
         connected: true,
         count: count ?? 0,
         ticketsSchemaReady,
         ordersTableReady,
+        ticketChannelReady,
+        hardcopyAuditTableReady,
         schemaWarning: warnings.length > 0 ? warnings.join(' ') : undefined,
       };
     } catch {
@@ -311,13 +789,14 @@ export const SupabaseServerService = {
           reserved_until: null,
           relworx_internal_ref: null,
         })
+        .eq('ticket_channel', 'online')
         .eq('status', 'reserved')
         .in('payment_status', ['unpaid', 'pending'])
         .lt('reserved_until', nowIso)
         .select('id');
 
-      // Fallback if optional relworx_internal_ref column is not yet present on public.tickets
-      if (tErr && (tErr.code === 'PGRST204' || tErr.code === '42703')) {
+      // Pre-migration fallback if ticket_channel or relworx_internal_ref column is not yet present
+      if (tErr && isMissingColumnError(tErr)) {
         const retry = await client
           .from('tickets')
           .update({
@@ -354,8 +833,8 @@ export const SupabaseServerService = {
   },
 
   /**
-   * Public Inventory Counts ONLY: Read VIP and Ordinary availability from Supabase.
-   * VIP: UGX 50,000 each; Ordinary: UGX 20,000 each.
+   * Public Inventory Counts ONLY: Read ONLINE VIP and Ordinary availability from Supabase.
+   * Excludes all hardcopy tickets (ORD-051..ORD-250 and VIP-021..VIP-120).
    * Never exposes buyer details, personal phone numbers, or QR tokens.
    */
   async getPublicCounts(): Promise<{ success: boolean; counts?: PublicInventoryCounts; error?: string }> {
@@ -370,12 +849,28 @@ export const SupabaseServerService = {
     await this.releaseExpiredReservations();
 
     try {
-      const { data, error } = await client
+      let data: Array<{ ticket_number?: string; category: string; status: string; ticket_channel?: string | null }> | null = null;
+      let error: any = null;
+
+      const primary = await client
         .from('tickets')
-        .select('category, status');
+        .select('ticket_number, category, status, ticket_channel')
+        .eq('ticket_channel', 'online');
+
+      data = primary.data as any;
+      error = primary.error;
+
+      // Graceful pre-migration fallback if ticket_channel column has not been added yet
+      if (error && isMissingColumnError(error, 'ticket_channel')) {
+        const fallback = await client
+          .from('tickets')
+          .select('ticket_number, category, status');
+        data = fallback.data as any;
+        error = fallback.error;
+      }
 
       if (error) {
-        console.error('[Supabase getPublicCounts Error]', error.code, error.message);
+        console.error('[Supabase getPublicCounts Error]', error.code, sanitizeDiagnosticText(error.message));
         return { success: false, error: 'Unable to load live ticket inventory at this time.' };
       }
 
@@ -386,11 +881,14 @@ export const SupabaseServerService = {
         };
       }
 
-      const vipTotal = data.filter((t) => t.category === 'VIP').length;
-      const vipAvail = data.filter((t) => t.category === 'VIP' && t.status === 'available').length;
+      // Defense-in-depth: strictly exclude any hardcopy row by both ticket_channel and ticket_number range
+      const onlineOnly = data.filter((t) => isOnlineTicketRow(t));
 
-      const ordTotal = data.filter((t) => t.category === 'ORDINARY').length;
-      const ordAvail = data.filter((t) => t.category === 'ORDINARY' && t.status === 'available').length;
+      const vipTotal = onlineOnly.filter((t) => t.category === 'VIP').length;
+      const vipAvail = onlineOnly.filter((t) => t.category === 'VIP' && t.status === 'available').length;
+
+      const ordTotal = onlineOnly.filter((t) => t.category === 'ORDINARY').length;
+      const ordAvail = onlineOnly.filter((t) => t.category === 'ORDINARY' && t.status === 'available').length;
 
       return {
         success: true,
@@ -402,7 +900,7 @@ export const SupabaseServerService = {
         },
       };
     } catch (err: any) {
-      console.error('[Supabase getPublicCounts Exception]', err?.message || err);
+      console.error('[Supabase getPublicCounts Exception]', sanitizeDiagnosticText(err?.message || ''));
       return { success: false, error: 'Unable to reach the ticketing database.' };
     }
   },
@@ -499,17 +997,37 @@ export const SupabaseServerService = {
     const reservedUntil = new Date(timestamp + 15 * 60 * 1000).toISOString(); // 15-minute hold
 
     try {
-      // Find and atomically lock available tickets
-      const { data: available, error: fetchErr } = await client
+      // Find and atomically lock available ONLINE tickets only (never hardcopy passes)
+      let candidateRows: Array<{ id: string; ticket_number: string; ticket_channel?: string | null }> | null = null;
+      let fetchErr: any = null;
+
+      const primaryFetch = await client
         .from('tickets')
-        .select('id, ticket_number')
+        .select('id, ticket_number, ticket_channel')
+        .eq('ticket_channel', 'online')
         .eq('category', category)
         .eq('status', 'available')
         .order('ticket_number', { ascending: true })
         .limit(quantity);
 
-      if (fetchErr || !available || available.length < quantity) {
-        const count = available?.length || 0;
+      candidateRows = primaryFetch.data as any;
+      fetchErr = primaryFetch.error;
+
+      if (fetchErr && isMissingColumnError(fetchErr, 'ticket_channel')) {
+        const fallbackFetch = await client
+          .from('tickets')
+          .select('id, ticket_number')
+          .eq('category', category)
+          .eq('status', 'available')
+          .order('ticket_number', { ascending: true });
+        candidateRows = fallbackFetch.data as any;
+        fetchErr = fallbackFetch.error;
+      }
+
+      const available = (candidateRows || []).filter((t) => isOnlineTicketRow(t)).slice(0, quantity);
+
+      if (fetchErr || available.length < quantity) {
+        const count = available.length;
         return {
           success: false,
           message: `Sold out or insufficient inventory. Only ${count} ${category} ticket(s) currently available.`,
@@ -1391,13 +1909,31 @@ export const SupabaseServerService = {
     }
 
     try {
-      const { data: available, error: fetchErr } = await client
+      let candidateRows: Array<{ id: string; ticket_number: string; ticket_channel?: string | null }> | null = null;
+      let fetchErr: any = null;
+
+      const primaryFetch = await client
         .from('tickets')
-        .select('id, ticket_number')
+        .select('id, ticket_number, ticket_channel')
+        .eq('ticket_channel', 'online')
         .eq('category', category)
         .eq('status', 'available')
         .order('ticket_number', { ascending: true })
         .limit(quantity);
+
+      candidateRows = primaryFetch.data as any;
+      fetchErr = primaryFetch.error;
+
+      if (fetchErr && isMissingColumnError(fetchErr, 'ticket_channel')) {
+        const fallbackFetch = await client
+          .from('tickets')
+          .select('id, ticket_number')
+          .eq('category', category)
+          .eq('status', 'available')
+          .order('ticket_number', { ascending: true });
+        candidateRows = fallbackFetch.data as any;
+        fetchErr = fallbackFetch.error;
+      }
 
       if (fetchErr) {
         console.error('[Supabase reserveTicketsDirect fetchErr]', fetchErr.code, sanitizeDiagnosticText(fetchErr.message));
@@ -1408,10 +1944,12 @@ export const SupabaseServerService = {
         };
       }
 
-      if (!available || available.length < quantity) {
+      const available = (candidateRows || []).filter((t) => isOnlineTicketRow(t)).slice(0, quantity);
+
+      if (available.length < quantity) {
         return {
           success: false,
-          message: `Insufficient tickets available. Only ${available?.length || 0} ${category} pass(es) currently remaining.`,
+          message: `Insufficient tickets available. Only ${available.length} ${category} pass(es) currently remaining.`,
           error: 'INSUFFICIENT_INVENTORY',
         };
       }
@@ -1738,11 +2276,19 @@ export const SupabaseServerService = {
           });
 
           if (relCheck.success && relCheck.status === 'success') {
-            await this.markOrderAsPaid(orderRef, {
-              relworx: relCheck,
-              relworx_internal_ref: relCheck.internal_reference,
-            });
-            return await this.getOrderStatus(orderRef);
+            const currencyValid = !relCheck.currency || String(relCheck.currency).toUpperCase() === 'UGX';
+            const amountValid =
+              relCheck.amount === undefined ||
+              relCheck.amount === null ||
+              Math.round(Number(relCheck.amount)) === Math.round(Number(order.total_amount_ugx));
+
+            if (currencyValid && amountValid) {
+              await this.markOrderAsPaid(orderRef, {
+                relworx: relCheck,
+                relworx_internal_ref: relCheck.internal_reference,
+              });
+              return await this.getOrderStatus(orderRef);
+            }
           } else if (relCheck.status === 'failed') {
             await this.releaseReservationByOrderRef(orderRef);
             return {
@@ -1868,6 +2414,101 @@ export const SupabaseServerService = {
   },
 
   /**
+   * Fetch trusted server-side order details for payment amount/currency/reference verification.
+   */
+  async getOrderForPaymentVerification(orderRef: string): Promise<{
+    found: boolean;
+    order?: {
+      order_ref: string;
+      status: string;
+      total_amount_ugx: number;
+      currency: 'UGX';
+      relworx_internal_ref: string | null;
+      gateway?: string | null;
+      payment_method?: string | null;
+      verification_status?: string | null;
+    };
+    error?: string;
+  }> {
+    const refCheck = normalizeStrictOrderRef(orderRef);
+    if (!refCheck.valid) {
+      return { found: false, error: 'INVALID_ORDER_REF' };
+    }
+
+    const { client } = getSupabaseClient();
+    if (!client) {
+      return { found: false, error: 'SUPABASE_NOT_CONFIGURED' };
+    }
+
+    try {
+      const { data: orderRow, error: orderErr } = await client
+        .from('orders')
+        .select('order_ref, status, total_amount_ugx, relworx_internal_ref, gateway, payment_method, verification_status')
+        .eq('order_ref', refCheck.orderRef)
+        .maybeSingle();
+
+      if (!orderErr && orderRow) {
+        return {
+          found: true,
+          order: {
+            order_ref: orderRow.order_ref,
+            status: orderRow.status,
+            total_amount_ugx: Math.round(Number(orderRow.total_amount_ugx)),
+            currency: 'UGX',
+            relworx_internal_ref: orderRow.relworx_internal_ref || null,
+            gateway: orderRow.gateway || null,
+            payment_method: orderRow.payment_method || null,
+            verification_status: orderRow.verification_status || null,
+          },
+        };
+      }
+
+      if (orderErr && !isMissingRelationError(orderErr, 'orders')) {
+        return { found: false, error: 'DATABASE_ERROR' };
+      }
+
+      // Pre-migration fallback when public.orders table does not exist yet
+      const { data: ticketRows, error: ticketErr } = await client
+        .from('tickets')
+        .select('ticket_number, category, price_ugx, status, payment_status, relworx_internal_ref, ticket_channel')
+        .eq('order_ref', refCheck.orderRef);
+
+      if (ticketErr || !ticketRows || ticketRows.length === 0) {
+        return { found: false };
+      }
+
+      const onlineRows = ticketRows.filter((r: any) => isOnlineTicketRow(r));
+      if (onlineRows.length === 0) {
+        return { found: false };
+      }
+
+      const allPaid = onlineRows.every(
+        (t: any) => t.status === 'issued' && (t.payment_status === 'paid' || t.payment_status === 'manual_paid')
+      );
+      const computedAmount = onlineRows.reduce((sum: number, t: any) => {
+        const trustedUnit = t.category === 'VIP' ? 50000 : 20000;
+        return sum + trustedUnit;
+      }, 0);
+
+      return {
+        found: true,
+        order: {
+          order_ref: refCheck.orderRef,
+          status: allPaid ? 'paid' : 'pending',
+          total_amount_ugx: computedAmount,
+          currency: 'UGX',
+          relworx_internal_ref: onlineRows[0].relworx_internal_ref || null,
+          gateway: 'relworx',
+          payment_method: 'relworx_mobile_money',
+          verification_status: allPaid ? 'verified' : 'unsubmitted',
+        },
+      };
+    } catch {
+      return { found: false, error: 'DATABASE_ERROR' };
+    }
+  },
+
+  /**
    * Admin manual verification of an order with Relworx
    */
   async verifyRelworxOrderDirectly(orderRef: string): Promise<{ success: boolean; message: string }> {
@@ -1876,47 +2517,36 @@ export const SupabaseServerService = {
       return { success: false, message: configError || 'Supabase database is not connected.' };
     }
 
-    let order: { relworx_internal_ref?: string | null; status?: string } | null = null;
-    const { data: orderRow, error: orderErr } = await client
-      .from('orders')
-      .select('relworx_internal_ref, status')
-      .eq('order_ref', orderRef)
-      .maybeSingle();
-
-    if (!orderErr && orderRow) {
-      order = orderRow;
-    } else if (!orderRow || isMissingRelationError(orderErr, 'orders')) {
-      const { data: ticketRows } = await client
-        .from('tickets')
-        .select('relworx_internal_ref, status, payment_status')
-        .eq('order_ref', orderRef);
-
-      if (ticketRows && ticketRows.length > 0) {
-        const allPaid = ticketRows.every(
-          (t) => t.status === 'issued' && (t.payment_status === 'paid' || t.payment_status === 'manual_paid')
-        );
-        order = {
-          relworx_internal_ref: ticketRows[0].relworx_internal_ref,
-          status: allPaid ? 'paid' : 'pending',
-        };
-      }
-    }
-
-    if (!order) {
+    const orderInfo = await this.getOrderForPaymentVerification(orderRef);
+    if (!orderInfo.found || !orderInfo.order) {
       return { success: false, message: 'Order reference not found in database.' };
     }
 
+    const order = orderInfo.order;
     if (order.status === 'paid') {
       return { success: true, message: 'Order is already confirmed and paid.' };
     }
 
     const check = await RelworxService.checkRequestStatus({
       internalReference: order.relworx_internal_ref || undefined,
-      reference: orderRef,
+      reference: order.order_ref,
     });
 
-    if (check.status === 'success') {
-      await this.markOrderAsPaid(orderRef, { relworx: check, relworx_internal_ref: check.internal_reference });
+    if (check.success && check.status === 'success') {
+      if (check.currency && String(check.currency).toUpperCase() !== 'UGX') {
+        return { success: false, message: 'Provider currency mismatch; expected UGX.' };
+      }
+      if (
+        check.amount !== undefined &&
+        check.amount !== null &&
+        Math.round(Number(check.amount)) !== Math.round(Number(order.total_amount_ugx))
+      ) {
+        return {
+          success: false,
+          message: 'Provider payment amount does not match the stored order total.',
+        };
+      }
+      await this.markOrderAsPaid(order.order_ref, { relworx: check, relworx_internal_ref: check.internal_reference });
       return { success: true, message: 'Relworx confirmed payment! Tickets successfully issued.' };
     }
 
@@ -1927,95 +2557,602 @@ export const SupabaseServerService = {
   },
 
   /**
-   * Lookup purchased tickets by contact phone or order reference
-   * Strictly returns only ISSUED & PAID tickets from Supabase
+   * Verified Customer Order Lookup:
+   * - Eliminates raw string interpolation into PostgREST .or() filters.
+   * - Accepts ONLY a strictly validated Uganda phone number OR exact hyphen-preserving order reference.
+   * - Requires a matching second ownership factor (checkout email, phone, or order reference).
+   * - Never selects or returns qr_token, buyer_email, buyer_phone, or unrelated buyers' records.
    */
-  async lookupTicketsByContact(contact: string): Promise<TicketRow[]> {
-    const { client } = getSupabaseClient();
-    if (!client) {
-      return [];
+  async lookupOrdersVerified(params: {
+    contact: string;
+    verification: string;
+  }): Promise<{
+    success: boolean;
+    httpStatus: number;
+    count: number;
+    tickets: PublicLookupTicketSummary[];
+    error?: string;
+    message?: string;
+  }> {
+    const rawContact = String(params.contact || '').trim();
+    const rawVerification = String(params.verification || '').trim();
+
+    if (!rawContact) {
+      return {
+        success: false,
+        httpStatus: 400,
+        count: 0,
+        tickets: [],
+        error: 'VALIDATION_ERROR',
+        message: 'Please enter a valid Uganda phone number or exact order reference.',
+      };
     }
 
-    const clean = contact.trim().replace(/[\s-]/g, '');
+    // Parse primary identifier (either exact hyphenated order reference OR Uganda phone)
+    const primaryOrderRef = normalizeStrictOrderRef(rawContact);
+    const primaryPhone = !primaryOrderRef.valid ? RelworxService.formatUgandaMsisdn(rawContact) : null;
+
+    if (!primaryOrderRef.valid && (!primaryPhone || !primaryPhone.valid)) {
+      return {
+        success: false,
+        httpStatus: 400,
+        count: 0,
+        tickets: [],
+        error: 'VALIDATION_ERROR',
+        message: 'Enter a valid Uganda phone number (e.g. 0775 198 484) or exact order reference (e.g. PP-RWX-...).',
+      };
+    }
+
+    if (!rawVerification) {
+      return {
+        success: false,
+        httpStatus: 400,
+        count: 0,
+        tickets: [],
+        error: 'OWNERSHIP_VERIFICATION_REQUIRED',
+        message:
+          'Ownership verification is required: enter your checkout email address (or matching order reference / phone number).',
+      };
+    }
+
+    const verifEmailValid = EMAIL_STRICT_REGEX.test(rawVerification);
+    const verifOrderRef = !verifEmailValid ? normalizeStrictOrderRef(rawVerification) : { valid: false, orderRef: '' };
+    const verifPhone =
+      !verifEmailValid && !verifOrderRef.valid ? RelworxService.formatUgandaMsisdn(rawVerification) : null;
+
+    let resolvedOrderRef: string | null = primaryOrderRef.valid ? primaryOrderRef.orderRef : null;
+    let resolvedMsisdn: string | null = primaryPhone?.valid ? primaryPhone.msisdn : null;
+    let resolvedEmailLower: string | null = null;
+
+    if (primaryOrderRef.valid) {
+      // Primary is orderRef -> verification must be checkout email OR checkout phone
+      if (verifEmailValid) {
+        resolvedEmailLower = rawVerification.toLowerCase();
+      } else if (verifPhone && verifPhone.valid) {
+        resolvedMsisdn = verifPhone.msisdn;
+      } else {
+        return {
+          success: false,
+          httpStatus: 400,
+          count: 0,
+          tickets: [],
+          error: 'OWNERSHIP_VERIFICATION_REQUIRED',
+          message: 'When searching by order reference, verify ownership using the email or phone number used at checkout.',
+        };
+      }
+    } else {
+      // Primary is phone -> verification must be checkout email OR exact orderRef
+      if (verifEmailValid) {
+        resolvedEmailLower = rawVerification.toLowerCase();
+      } else if (verifOrderRef.valid) {
+        resolvedOrderRef = verifOrderRef.orderRef;
+      } else {
+        return {
+          success: false,
+          httpStatus: 400,
+          count: 0,
+          tickets: [],
+          error: 'OWNERSHIP_VERIFICATION_REQUIRED',
+          message: 'When searching by phone number, verify ownership using your checkout email address or exact order reference.',
+        };
+      }
+    }
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        httpStatus: 503,
+        count: 0,
+        tickets: [],
+        error: 'SUPABASE_NOT_CONFIGURED',
+        message: configError || 'Ticketing database is currently offline.',
+      };
+    }
+
+    // Notice: qr_token is NEVER selected from the database here
+    const selectCols =
+      'ticket_number, category, price_ugx, status, payment_status, buyer_name, buyer_email, buyer_phone, order_ref, paid_at, checked_in_at, ticket_channel';
+    const preMigrationCols =
+      'ticket_number, category, price_ugx, status, payment_status, buyer_name, buyer_email, buyer_phone, order_ref, paid_at, checked_in_at';
 
     try {
-      const { data, error } = await client
-        .from('tickets')
-        .select('*')
-        .or(`buyer_phone.ilike.%${clean}%,order_ref.eq.${clean}`)
-        .eq('status', 'issued')
-        .in('payment_status', ['paid', 'manual_paid']);
+      let candidateRows: any[] = [];
 
-      if (!error && data) {
-        return data as TicketRow[];
+      if (resolvedOrderRef) {
+        let queryRes: { data: any[] | null; error: any } = await client
+          .from('tickets')
+          .select(selectCols)
+          .eq('order_ref', resolvedOrderRef)
+          .eq('status', 'issued')
+          .in('payment_status', ['paid', 'manual_paid'])
+          .eq('ticket_channel', 'online')
+          .order('ticket_number', { ascending: true })
+          .limit(20);
+
+        if (queryRes.error && isMissingColumnError(queryRes.error, 'ticket_channel')) {
+          queryRes = await client
+            .from('tickets')
+            .select(preMigrationCols)
+            .eq('order_ref', resolvedOrderRef)
+            .eq('status', 'issued')
+            .in('payment_status', ['paid', 'manual_paid'])
+            .order('ticket_number', { ascending: true })
+            .limit(20);
+        }
+
+        if (queryRes.error) {
+          return {
+            success: false,
+            httpStatus: 503,
+            count: 0,
+            tickets: [],
+            error: 'DATABASE_ERROR',
+            message: 'Unable to complete ticket lookup right now.',
+          };
+        }
+        candidateRows = queryRes.data || [];
+      } else if (resolvedEmailLower && resolvedMsisdn) {
+        // Escape LIKE metacharacters so _ or % can never act as wildcards
+        const escapedExactEmail = resolvedEmailLower.replace(/[\\%_]/g, '\\$&');
+        let queryRes: { data: any[] | null; error: any } = await client
+          .from('tickets')
+          .select(selectCols)
+          .ilike('buyer_email', escapedExactEmail)
+          .eq('status', 'issued')
+          .in('payment_status', ['paid', 'manual_paid'])
+          .eq('ticket_channel', 'online')
+          .order('ticket_number', { ascending: true })
+          .limit(25);
+
+        if (queryRes.error && isMissingColumnError(queryRes.error, 'ticket_channel')) {
+          queryRes = await client
+            .from('tickets')
+            .select(preMigrationCols)
+            .ilike('buyer_email', escapedExactEmail)
+            .eq('status', 'issued')
+            .in('payment_status', ['paid', 'manual_paid'])
+            .order('ticket_number', { ascending: true })
+            .limit(25);
+        }
+
+        if (queryRes.error) {
+          return {
+            success: false,
+            httpStatus: 503,
+            count: 0,
+            tickets: [],
+            error: 'DATABASE_ERROR',
+            message: 'Unable to complete ticket lookup right now.',
+          };
+        }
+        candidateRows = queryRes.data || [];
       }
-    } catch (err) {
-      console.warn('Error looking up tickets in Supabase:', err);
-    }
 
-    return [];
+      // Constant-time ownership verification & strict online-channel filtering per row
+      const verifiedTickets: PublicLookupTicketSummary[] = [];
+      for (const row of candidateRows) {
+        if (!isOnlineTicketRow(row)) continue;
+        if (row.status !== 'issued') continue;
+        if (row.payment_status !== 'paid' && row.payment_status !== 'manual_paid') continue;
+
+        if (resolvedOrderRef) {
+          const rowRef = String(row.order_ref || '').trim().toUpperCase();
+          if (!rowRef || !safeCompareSecret(rowRef, resolvedOrderRef)) continue;
+        }
+
+        if (resolvedEmailLower) {
+          const rowEmail = String(row.buyer_email || '').trim().toLowerCase();
+          if (!rowEmail || !safeCompareSecret(rowEmail, resolvedEmailLower)) continue;
+        }
+
+        if (resolvedMsisdn) {
+          const rowPhone = RelworxService.formatUgandaMsisdn(String(row.buyer_phone || ''));
+          if (!rowPhone.valid || !safeCompareSecret(rowPhone.msisdn, resolvedMsisdn)) continue;
+        }
+
+        verifiedTickets.push({
+          ticket_number: row.ticket_number,
+          category: row.category,
+          price_ugx: Number(row.price_ugx || 0),
+          status: 'issued',
+          payment_status: row.payment_status,
+          buyer_name: row.buyer_name || null,
+          order_ref: row.order_ref || null,
+          paid_at: row.paid_at || null,
+          checked_in_at: row.checked_in_at || null,
+        });
+      }
+
+      // Uniform non-enumerating response when no rows match or ownership check fails
+      if (verifiedTickets.length === 0) {
+        return {
+          success: true,
+          httpStatus: 200,
+          count: 0,
+          tickets: [],
+          message: 'No confirmed tickets matched the provided details.',
+        };
+      }
+
+      return {
+        success: true,
+        httpStatus: 200,
+        count: verifiedTickets.length,
+        tickets: verifiedTickets,
+      };
+    } catch {
+      return {
+        success: false,
+        httpStatus: 500,
+        count: 0,
+        tickets: [],
+        error: 'SERVER_ERROR',
+        message: 'Unable to complete ticket lookup right now.',
+      };
+    }
   },
 
   /**
-   * Atomic Gate Check-in: Checks qr_token or ticket_number, enforces paid & unused
+   * Backwards-compatible wrapper that enforces ownership verification and never returns raw QR tokens.
+   */
+  async lookupTicketsByContact(contact: string, verification: string = ''): Promise<PublicLookupTicketSummary[]> {
+    const res = await this.lookupOrdersVerified({ contact, verification });
+    return res.success ? res.tickets : [];
+  },
+
+  /**
+   * Read-Only Public Ticket Validity Lookup (QR Token UUID ONLY):
+   * - Accepts only a valid UUID qr_token (or ?verify=<uuid> URL).
+   * - Rejects sequential ticket numbers (e.g. VIP-001, ORD-051) to prevent enumeration.
+   * - Never exposes buyer_name, buyer_email, buyer_phone, order_ref, or qr_token.
+   * - Strictly read-only: NEVER updates checked_in_at or mutates database state.
+   */
+  async getPublicTicketStatusByToken(rawToken: string): Promise<{
+    success: boolean;
+    valid: boolean;
+    status: 'VALID_UNUSED' | 'INACTIVE' | 'ALREADY_USED' | 'CANCELLED' | 'INVALID';
+    message: string;
+    ticketNumber?: string;
+    category?: 'VIP' | 'ORDINARY';
+    channel?: 'online' | 'hardcopy';
+    checkedIn?: boolean;
+    httpStatus?: number;
+  }> {
+    const clean = extractVerificationInput(rawToken);
+    if (!clean || !UUID_STRICT_REGEX.test(clean)) {
+      return {
+        success: false,
+        valid: false,
+        status: 'INVALID',
+        message: 'A valid QR token UUID is required for public pass verification.',
+        httpStatus: 400,
+      };
+    }
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        valid: false,
+        status: 'INVALID',
+        message: configError || 'Ticketing verification service is currently offline.',
+        httpStatus: 503,
+      };
+    }
+
+    const normalizedUuid = clean.toLowerCase();
+
+    try {
+      let row: {
+        ticket_number: string;
+        category: 'VIP' | 'ORDINARY';
+        status: string;
+        payment_status: string;
+        checked_in_at: string | null;
+        ticket_channel?: 'online' | 'hardcopy' | null;
+      } | null = null;
+
+      const primary = await client
+        .from('tickets')
+        .select('ticket_number, category, status, payment_status, checked_in_at, ticket_channel')
+        .eq('qr_token', normalizedUuid)
+        .maybeSingle();
+
+      if (primary.error && isMissingColumnError(primary.error, 'ticket_channel')) {
+        const fallback = await client
+          .from('tickets')
+          .select('ticket_number, category, status, payment_status, checked_in_at')
+          .eq('qr_token', normalizedUuid)
+          .maybeSingle();
+        if (fallback.error) {
+          return {
+            success: false,
+            valid: false,
+            status: 'INVALID',
+            message: 'Unable to verify pass status right now.',
+            httpStatus: 503,
+          };
+        }
+        row = fallback.data as any;
+      } else if (primary.error) {
+        return {
+          success: false,
+          valid: false,
+          status: 'INVALID',
+          message: 'Unable to verify pass status right now.',
+          httpStatus: 503,
+        };
+      } else {
+        row = primary.data as any;
+      }
+
+      if (!row) {
+        return {
+          success: true,
+          valid: false,
+          status: 'INVALID',
+          message: 'Unrecognized QR code. This pass was not found in official Pool Party inventory.',
+          httpStatus: 200,
+        };
+      }
+
+      const channel: 'online' | 'hardcopy' =
+        row.ticket_channel === 'hardcopy' || inferTicketChannelFromNumber(row.ticket_number) === 'hardcopy'
+          ? 'hardcopy'
+          : 'online';
+
+      if (row.status === 'cancelled') {
+        return {
+          success: true,
+          valid: false,
+          status: 'CANCELLED',
+          ticketNumber: row.ticket_number,
+          category: row.category,
+          channel,
+          checkedIn: Boolean(row.checked_in_at),
+          message: 'This pass has been cancelled or voided and is not valid for gate entry.',
+          httpStatus: 200,
+        };
+      }
+
+      const isPaidAndIssued =
+        row.status === 'issued' && (row.payment_status === 'paid' || row.payment_status === 'manual_paid');
+
+      if (!isPaidAndIssued) {
+        return {
+          success: true,
+          valid: false,
+          status: 'INACTIVE',
+          ticketNumber: row.ticket_number,
+          category: row.category,
+          channel,
+          checkedIn: false,
+          message:
+            channel === 'hardcopy'
+              ? 'This hardcopy pass has not been activated for sale yet and is not valid for gate entry.'
+              : 'This pass is not yet paid or issued.',
+          httpStatus: 200,
+        };
+      }
+
+      if (row.checked_in_at) {
+        return {
+          success: true,
+          valid: false,
+          status: 'ALREADY_USED',
+          ticketNumber: row.ticket_number,
+          category: row.category,
+          channel,
+          checkedIn: true,
+          message: 'This pass has already been used for gate entry.',
+          httpStatus: 200,
+        };
+      }
+
+      return {
+        success: true,
+        valid: true,
+        status: 'VALID_UNUSED',
+        ticketNumber: row.ticket_number,
+        category: row.category,
+        channel,
+        checkedIn: false,
+        message: 'Authentic Pool Party pass — valid and unused. Present at the gate for staff check-in.',
+        httpStatus: 200,
+      };
+    } catch {
+      return {
+        success: false,
+        valid: false,
+        status: 'INVALID',
+        message: 'Unable to verify pass status right now.',
+        httpStatus: 500,
+      };
+    }
+  },
+
+  /**
+   * Atomic Gate Check-in: Checks qr_token (UUID) or ticket_number (VIP-xxx / ORD-xxx),
+   * enforces issued + paid/manual_paid + unused, and prevents simultaneous duplicate admissions.
+   * Never falls back to non-atomic behavior on arbitrary RPC or network errors.
    */
   async verifyAndCheckIn(tokenOrNumber: string): Promise<{
     status: 'ADMITTED' | 'ALREADY_USED' | 'UNPAID' | 'NOT_ISSUED' | 'CANCELLED' | 'INVALID';
     message: string;
     ticket?: TicketRow;
     checkedInAt?: string;
+    error?: string;
+    httpStatus?: number;
   }> {
+    const clean = extractVerificationInput(tokenOrNumber);
+    if (!clean) {
+      return {
+        status: 'INVALID',
+        message: 'Invalid or unrecognized QR token / ticket number.',
+        httpStatus: 400,
+      };
+    }
+
+    const isUuid = UUID_STRICT_REGEX.test(clean);
+    const isTicketNumber = !isUuid && TICKET_NUMBER_STRICT_REGEX.test(clean);
+
+    // Strict input validation: reject malformed strings before querying PostgREST / RPC
+    if (!isUuid && !isTicketNumber) {
+      return {
+        status: 'INVALID',
+        message: 'Invalid or unrecognized QR token / ticket number.',
+        httpStatus: 200,
+      };
+    }
+
+    const normalizedLookup = isUuid ? clean.toLowerCase() : clean.toUpperCase();
+
     const { client } = getSupabaseClient();
     if (!client) {
       return {
         status: 'INVALID',
+        error: 'SUPABASE_NOT_CONFIGURED',
+        httpStatus: 503,
         message: 'Database offline. Check-in system requires active Supabase connection.',
       };
     }
 
-    const clean = tokenOrNumber.trim();
-
-    try {
-      const { data: rpcRes, error: rpcErr } = await client.rpc('gate_checkin_atomic', {
-        p_token_or_number: clean,
-      });
-
-      if (!rpcErr && rpcRes && rpcRes.status) {
-        return rpcRes;
-      }
-    } catch {
-      // Proceed to direct table update
+    // In-process concurrency guard for simultaneous scans on the same server instance
+    if (_inFlightTicketCheckIns.has(normalizedLookup)) {
+      return {
+        status: 'ALREADY_USED',
+        message: 'Duplicate simultaneous scan detected. Please wait for the active scan to finish.',
+        httpStatus: 200,
+      };
     }
 
-    try {
-      const { data, error } = await client
-        .from('tickets')
-        .select('*')
-        .or(`qr_token.eq.${clean},ticket_number.eq.${clean}`)
-        .maybeSingle();
+    _inFlightTicketCheckIns.add(normalizedLookup);
 
-      if (error || !data) {
+    try {
+      let rpcMissing = false;
+      try {
+        const { data: rpcRes, error: rpcErr } = await client.rpc('gate_checkin_atomic', {
+          p_token_or_number: normalizedLookup,
+        });
+
+        if (!rpcErr && rpcRes && rpcRes.status) {
+          return {
+            status: rpcRes.status,
+            message: rpcRes.message,
+            checkedInAt: rpcRes.checkedInAt,
+            ticket: sanitizeCheckInTicket(rpcRes.ticket),
+            httpStatus: 200,
+          };
+        }
+
+        if (rpcErr && isMissingRpcError(rpcErr)) {
+          rpcMissing = true;
+        } else {
+          console.error('[gate_checkin_atomic RPC Error]', rpcErr?.code, sanitizeDiagnosticText(rpcErr?.message || ''));
+          return {
+            status: 'INVALID',
+            error: 'DATABASE_ERROR',
+            httpStatus: 503,
+            message: 'Unable to complete atomic gate check-in right now. Please retry.',
+          };
+        }
+      } catch (rpcException: any) {
+        console.error('[gate_checkin_atomic Network Exception]', sanitizeDiagnosticText(rpcException?.message || ''));
         return {
           status: 'INVALID',
-          message: 'Invalid or unrecognized QR token / ticket number.',
+          error: 'DATABASE_ERROR',
+          httpStatus: 503,
+          message: 'Network error communicating with check-in database. Please retry.',
         };
       }
 
-      const ticket = data as TicketRow;
+      if (!rpcMissing) {
+        return {
+          status: 'INVALID',
+          error: 'DATABASE_ERROR',
+          httpStatus: 503,
+          message: 'Unable to complete atomic gate check-in right now.',
+        };
+      }
+
+      // Single-statement compare-and-set (`checked_in_at IS NULL`) ONLY when gate_checkin_atomic RPC does not exist yet
+      const checkInCols =
+        'id, ticket_number, category, price_ugx, status, payment_status, buyer_name, created_at, paid_at, checked_in_at, ticket_channel';
+      const preMigrationCheckInCols =
+        'id, ticket_number, category, price_ugx, status, payment_status, buyer_name, created_at, paid_at, checked_in_at';
+
+      let primaryLookup = isUuid
+        ? await client.from('tickets').select(checkInCols).eq('qr_token', normalizedLookup).maybeSingle()
+        : await client.from('tickets').select(checkInCols).eq('ticket_number', normalizedLookup).maybeSingle();
+
+      if (primaryLookup.error && isMissingColumnError(primaryLookup.error, 'ticket_channel')) {
+        primaryLookup = isUuid
+          ? await client.from('tickets').select(preMigrationCheckInCols).eq('qr_token', normalizedLookup).maybeSingle()
+          : await client.from('tickets').select(preMigrationCheckInCols).eq('ticket_number', normalizedLookup).maybeSingle();
+      }
+
+      const { data, error } = primaryLookup;
+
+      if (error) {
+        return {
+          status: 'INVALID',
+          error: 'DATABASE_ERROR',
+          httpStatus: 503,
+          message: 'Database error while verifying ticket. Please retry.',
+        };
+      }
+
+      if (!data) {
+        return {
+          status: 'INVALID',
+          message: 'Invalid or unrecognized QR token / ticket number.',
+          httpStatus: 200,
+        };
+      }
+
+      const ticket = data as unknown as TicketRow;
+      const safeTicket = sanitizeCheckInTicket(ticket);
+      const isHardcopy =
+        ticket.ticket_channel === 'hardcopy' || inferTicketChannelFromNumber(ticket.ticket_number) === 'hardcopy';
 
       if (ticket.status === 'cancelled') {
         return {
           status: 'CANCELLED',
-          message: `Ticket ${ticket.ticket_number} has been cancelled or revoked. Deny entry.`,
-          ticket,
+          message: `Ticket ${ticket.ticket_number} has been cancelled or voided. Deny entry.`,
+          ticket: safeTicket,
+          httpStatus: 200,
         };
       }
 
       if (ticket.status !== 'issued' || (ticket.payment_status !== 'paid' && ticket.payment_status !== 'manual_paid')) {
         return {
           status: 'UNPAID',
-          message: `Ticket ${ticket.ticket_number} is unpaid (${ticket.status}). Payment required.`,
-          ticket,
+          message: isHardcopy
+            ? `Hardcopy ticket ${ticket.ticket_number} has not been activated/sold yet. Deny entry.`
+            : `Ticket ${ticket.ticket_number} is unpaid (${ticket.status}). Payment required.`,
+          ticket: safeTicket,
+          httpStatus: 200,
         };
       }
 
@@ -2023,39 +3160,72 @@ export const SupabaseServerService = {
         return {
           status: 'ALREADY_USED',
           message: `DUPLICATE: Already used at ${new Date(ticket.checked_in_at).toLocaleTimeString()}.`,
-          ticket,
+          ticket: safeTicket,
           checkedInAt: ticket.checked_in_at,
+          httpStatus: 200,
         };
       }
 
       const now = new Date().toISOString();
-      const { data: updated, error: updateErr } = await client
+      let updateRes = await client
         .from('tickets')
         .update({ checked_in_at: now })
         .eq('id', ticket.id)
+        .eq('status', 'issued')
+        .in('payment_status', ['paid', 'manual_paid'])
         .is('checked_in_at', null)
-        .select()
-        .single();
+        .select(checkInCols)
+        .maybeSingle();
 
-      if (updateErr || !updated) {
+      if (updateRes.error && isMissingColumnError(updateRes.error, 'ticket_channel')) {
+        updateRes = await client
+          .from('tickets')
+          .update({ checked_in_at: now })
+          .eq('id', ticket.id)
+          .eq('status', 'issued')
+          .in('payment_status', ['paid', 'manual_paid'])
+          .is('checked_in_at', null)
+          .select(preMigrationCheckInCols)
+          .maybeSingle();
+      }
+
+      const { data: updated, error: updateErr } = updateRes;
+
+      if (updateErr) {
         return {
-          status: 'ALREADY_USED',
-          message: 'Duplicate scan detected. This ticket was just admitted.',
-          ticket,
+          status: 'INVALID',
+          error: 'DATABASE_ERROR',
+          httpStatus: 503,
+          message: 'Database error while recording check-in. Please retry.',
         };
       }
 
+      if (!updated) {
+        return {
+          status: 'ALREADY_USED',
+          message: 'Duplicate scan detected. This ticket was just admitted.',
+          ticket: safeTicket,
+          httpStatus: 200,
+        };
+      }
+
+      const safeUpdated = sanitizeCheckInTicket(updated as unknown as TicketRow);
       return {
         status: 'ADMITTED',
-        message: `ADMITTED: Welcome to Pool Party, ${updated.buyer_name || 'Guest'}! (${updated.category} Pass #${updated.ticket_number})`,
-        ticket: updated as TicketRow,
+        message: `ADMITTED: Welcome to Pool Party, ${(updated as any).buyer_name || 'Guest'}! (${(updated as any).category} Pass #${(updated as any).ticket_number})`,
+        ticket: safeUpdated,
         checkedInAt: now,
+        httpStatus: 200,
       };
     } catch {
       return {
         status: 'INVALID',
+        error: 'DATABASE_ERROR',
+        httpStatus: 503,
         message: 'Unable to complete check-in verification right now.',
       };
+    } finally {
+      _inFlightTicketCheckIns.delete(normalizedLookup);
     }
   },
 
@@ -2289,18 +3459,38 @@ export const SupabaseServerService = {
     await this.releaseExpiredReservations();
 
     try {
-      const { data: available, error: fetchErr } = await client
+      let candidateRows: TicketRow[] | null = null;
+      let fetchErr: any = null;
+
+      const primaryFetch = await client
         .from('tickets')
         .select('*')
+        .eq('ticket_channel', 'online')
         .eq('category', category)
         .eq('status', 'available')
         .order('ticket_number', { ascending: true })
         .limit(quantity);
 
-      if (fetchErr || !available || available.length < quantity) {
+      candidateRows = primaryFetch.data as TicketRow[] | null;
+      fetchErr = primaryFetch.error;
+
+      if (fetchErr && isMissingColumnError(fetchErr, 'ticket_channel')) {
+        const fallbackFetch = await client
+          .from('tickets')
+          .select('*')
+          .eq('category', category)
+          .eq('status', 'available')
+          .order('ticket_number', { ascending: true });
+        candidateRows = fallbackFetch.data as TicketRow[] | null;
+        fetchErr = fallbackFetch.error;
+      }
+
+      const available = (candidateRows || []).filter((t) => isOnlineTicketRow(t)).slice(0, quantity);
+
+      if (fetchErr || available.length < quantity) {
         return {
           success: false,
-          message: `Sold out! Only ${available?.length || 0} ${category} ticket(s) remaining.`,
+          message: `Sold out! Only ${available.length} ${category} ticket(s) remaining.`,
         };
       }
 
@@ -2353,63 +3543,854 @@ export const SupabaseServerService = {
     }
   },
 
-  async confirmPaymentAdmin(ticketId: string): Promise<boolean> {
-    const { client } = getSupabaseClient();
-    if (!client) return false;
+  /**
+   * Admin-Only Atomic Hardcopy Ticket Activation (Single Ticket or Contiguous Number Range)
+   * - Enforces hardcopy bounds (ORD-051..ORD-250, VIP-021..VIP-120); rejects online pool tickets.
+   * - All-or-nothing atomic activation: aborts if any ticket in the range is missing or not available.
+   * - Persists an immutable audit entry in public.hardcopy_audit_logs (rolls back activation if audit fails).
+   */
+  async activateHardcopyTicketsAdmin(params: {
+    ticketNumber?: string;
+    ticketNumbers?: string[];
+    category?: string;
+    startNumber?: string | number;
+    endNumber?: string | number;
+    sellerName: string;
+    performedBy?: string;
+    batchRef?: string;
+    buyerName?: string;
+    buyerPhone?: string;
+    notes?: string;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    error?: string;
+    batchRef?: string;
+    auditId?: string;
+    action?: 'activate_single' | 'activate_range';
+    category?: 'VIP' | 'ORDINARY';
+    activatedCount?: number;
+    ticketNumbers?: string[];
+    unitPriceUgx?: number;
+    totalAmountUgx?: number;
+    sellerName?: string;
+    performedBy?: string;
+    activatedAt?: string;
+    conflictingTickets?: string[];
+  }> {
+    const selection = parseHardcopySelection({
+      ticketNumber: params.ticketNumber,
+      ticketNumbers: params.ticketNumbers,
+      category: params.category,
+      startNumber: params.startNumber,
+      endNumber: params.endNumber,
+    });
 
-    const now = new Date().toISOString();
+    if (!selection.valid || !selection.category || !selection.ticketNumbers) {
+      return {
+        success: false,
+        error: selection.error || 'VALIDATION_ERROR',
+        message: selection.message || 'Invalid hardcopy ticket selection.',
+        conflictingTickets: selection.conflictingTickets,
+      };
+    }
+
+    const sellerName = String(params.sellerName ?? '').trim();
+    if (sellerName.length < 2 || sellerName.length > 120) {
+      return {
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'sellerName (assigned agent, promoter, or box office seller) is required (2–120 characters).',
+      };
+    }
+
+    const performedBy = params.performedBy === undefined ? 'Admin' : String(params.performedBy).trim();
+    if (performedBy.length < 2 || performedBy.length > 80) {
+      return {
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'performedBy (authorizing admin identifier) must be between 2 and 80 characters.',
+      };
+    }
+
+    const batchRef =
+      params.batchRef === undefined
+        ? `PP-HC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`
+        : String(params.batchRef).trim();
+
+    if (batchRef.length < 4 || batchRef.length > 120 || !/^[A-Za-z0-9_-]+$/.test(batchRef)) {
+      return {
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'batchRef must be 4–120 alphanumeric, hyphen, or underscore characters.',
+      };
+    }
+
+    const buyerName = params.buyerName ? String(params.buyerName).trim().slice(0, 120) : undefined;
+    const buyerPhone = params.buyerPhone ? String(params.buyerPhone).trim().slice(0, 40) : undefined;
+    const notes = params.notes ? String(params.notes).trim().slice(0, 500) : undefined;
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        error: 'SUPABASE_NOT_CONFIGURED',
+        message: configError || 'Ticketing database is offline.',
+      };
+    }
+
+    const category = selection.category;
+    const ticketNumbers = selection.ticketNumbers;
+    const action: 'activate_single' | 'activate_range' = selection.isRange ? 'activate_range' : 'activate_single';
+    const unitPriceUgx = HARDCOPY_RANGES[category].unitPriceUgx;
+
+    return runSerializedHardcopyMutation(async () => {
+      // Requires PostgreSQL transactional RPC (activate_hardcopy_tickets_atomic) so ticket updates
+      // and hardcopy_audit_logs inserts commit or roll back inside a single database transaction.
+      // Never performs non-atomic multi-step HTTP PATCH + compensating rollback.
+      try {
+        const { data: rpcRes, error: rpcErr } = await client.rpc('activate_hardcopy_tickets_atomic', {
+          p_ticket_numbers: ticketNumbers,
+          p_category: category,
+          p_action: action,
+          p_agent_or_seller: sellerName,
+          p_performed_by: performedBy,
+          p_batch_ref: batchRef,
+          p_buyer_name: buyerName || null,
+          p_buyer_phone: buyerPhone || null,
+          p_notes: notes || null,
+        });
+
+        if (!rpcErr && rpcRes && typeof rpcRes.success === 'boolean') {
+          return rpcRes;
+        }
+
+        if (rpcErr && isMissingRpcError(rpcErr)) {
+          return {
+            success: false,
+            error: 'SCHEMA_MISMATCH',
+            message:
+              'Required PostgreSQL RPC public.activate_hardcopy_tickets_atomic is not installed. Apply the hardcopy SQL migration before activating hardcopy tickets; no tickets were modified.',
+          };
+        }
+
+        const classified = classifySchemaError(
+          rpcErr,
+          'Database error while activating hardcopy tickets via atomic RPC. No tickets were modified.'
+        );
+        return {
+          success: false,
+          error: classified.error,
+          message: classified.message,
+        };
+      } catch (err: any) {
+        console.error('[Hardcopy Activation RPC Exception]', sanitizeDiagnosticText(err?.message || ''));
+        return {
+          success: false,
+          error: 'DATABASE_ERROR',
+          message: 'Unable to reach database RPC public.activate_hardcopy_tickets_atomic. No tickets were modified.',
+        };
+      }
+    });
+  },
+
+  /**
+   * Admin-Only Atomic Hardcopy Return / Void Status Update (Preserves Printed QR Tokens)
+   * - deactivate_return: returns un-scanned activated ('issued') physical tickets to available/unpaid stock.
+   * - void_cancel: permanently cancels non-cancelled physical tickets so they are denied at gate.
+   * - Requires PostgreSQL RPC public.update_hardcopy_tickets_status_atomic (single database transaction).
+   */
+  async updateHardcopyTicketsStatusAdmin(params: {
+    ticketNumber?: string;
+    ticketNumbers?: string[];
+    category?: string;
+    startNumber?: string | number;
+    endNumber?: string | number;
+    action: 'deactivate_return' | 'void_cancel';
+    sellerName: string;
+    performedBy?: string;
+    batchRef?: string;
+    notes?: string;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    error?: string;
+    auditId?: string;
+    batchRef?: string;
+    action?: 'deactivate_return' | 'void_cancel';
+    category?: 'VIP' | 'ORDINARY';
+    updatedCount?: number;
+    ticketNumbers?: string[];
+    conflictingTickets?: string[];
+  }> {
+    if (params.action !== 'deactivate_return' && params.action !== 'void_cancel') {
+      return {
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'action must be deactivate_return or void_cancel.',
+      };
+    }
+
+    const selection = parseHardcopySelection({
+      ticketNumber: params.ticketNumber,
+      ticketNumbers: params.ticketNumbers,
+      category: params.category,
+      startNumber: params.startNumber,
+      endNumber: params.endNumber,
+    });
+
+    if (!selection.valid || !selection.category || !selection.ticketNumbers) {
+      return {
+        success: false,
+        error: selection.error || 'VALIDATION_ERROR',
+        message: selection.message || 'Invalid hardcopy ticket selection.',
+        conflictingTickets: selection.conflictingTickets,
+      };
+    }
+
+    const sellerName = String(params.sellerName ?? '').trim();
+    if (sellerName.length < 2 || sellerName.length > 120) {
+      return {
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'sellerName (agent/seller reference) is required (2–120 characters).',
+      };
+    }
+
+    const performedBy = params.performedBy === undefined ? 'Admin' : String(params.performedBy).trim();
+    if (performedBy.length < 2 || performedBy.length > 80) {
+      return {
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'performedBy (authorizing admin identifier) must be between 2 and 80 characters.',
+      };
+    }
+
+    const batchRef =
+      params.batchRef === undefined
+        ? `PP-HC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`
+        : String(params.batchRef).trim();
+
+    if (batchRef.length < 4 || batchRef.length > 120 || !/^[A-Za-z0-9_-]+$/.test(batchRef)) {
+      return {
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'batchRef must be 4–120 alphanumeric, hyphen, or underscore characters.',
+      };
+    }
+
+    const notes = params.notes ? String(params.notes).trim().slice(0, 500) : undefined;
+    const category = selection.category;
+    const ticketNumbers = selection.ticketNumbers;
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        error: 'SUPABASE_NOT_CONFIGURED',
+        message: configError || 'Ticketing database is offline.',
+      };
+    }
+
+    return runSerializedHardcopyMutation(async () => {
+      try {
+        const { data: rpcRes, error: rpcErr } = await client.rpc('update_hardcopy_tickets_status_atomic', {
+          p_ticket_numbers: ticketNumbers,
+          p_category: category,
+          p_action: params.action,
+          p_agent_or_seller: sellerName,
+          p_performed_by: performedBy,
+          p_batch_ref: batchRef,
+          p_notes: notes || null,
+        });
+
+        if (!rpcErr && rpcRes && typeof rpcRes.success === 'boolean') {
+          return rpcRes;
+        }
+
+        if (rpcErr && isMissingRpcError(rpcErr)) {
+          return {
+            success: false,
+            error: 'SCHEMA_MISMATCH',
+            message:
+              'Required PostgreSQL RPC public.update_hardcopy_tickets_status_atomic is not installed. Apply the hardcopy SQL migration before updating hardcopy ticket status; no tickets were modified.',
+          };
+        }
+
+        const classified = classifySchemaError(
+          rpcErr,
+          'Database error updating hardcopy ticket status via atomic RPC. No tickets were modified.'
+        );
+        return { success: false, error: classified.error, message: classified.message };
+      } catch (err: any) {
+        console.error('[Hardcopy Status RPC Exception]', sanitizeDiagnosticText(err?.message || ''));
+        return {
+          success: false,
+          error: 'DATABASE_ERROR',
+          message: 'Unable to reach database RPC public.update_hardcopy_tickets_status_atomic. No tickets were modified.',
+        };
+      }
+    });
+  },
+
+  /**
+   * Admin-Only Read Hardcopy Audit Logs
+   */
+  async getHardcopyAuditLogsAdmin(limit = 100): Promise<{
+    success: boolean;
+    logs: HardcopyAuditRow[];
+    error?: string;
+    message?: string;
+  }> {
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        logs: [],
+        error: 'SUPABASE_NOT_CONFIGURED',
+        message: configError || 'Database not connected.',
+      };
+    }
+
+    const boundedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+
     try {
-      const { data: ticket } = await client
-        .from('tickets')
-        .select('order_ref')
-        .eq('id', ticketId)
-        .single();
+      const { data, error } = await client
+        .from('hardcopy_audit_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(boundedLimit);
 
-      const { error } = await client
+      if (error) {
+        const classified = classifySchemaError(
+          error,
+          'Unable to load hardcopy audit logs. Ensure Stage 1 migration has been applied.'
+        );
+        return {
+          success: false,
+          logs: [],
+          error: classified.error,
+          message: classified.message,
+        };
+      }
+
+      return {
+        success: true,
+        logs: (data as HardcopyAuditRow[]) || [],
+      };
+    } catch {
+      return {
+        success: false,
+        logs: [],
+        error: 'DATABASE_ERROR',
+        message: 'Failed to query hardcopy audit logs.',
+      };
+    }
+  },
+
+  /**
+   * Admin-Only Channel Summary (Separates Online 70 Pool vs Hardcopy 300 Pool)
+   */
+  async getChannelInventorySummaryAdmin(): Promise<{
+    success: boolean;
+    summary?: {
+      online: {
+        ordinary: { total: number; available: number; reserved: number; issued: number; checkedIn: number; revenueUgx: number };
+        vip: { total: number; available: number; reserved: number; issued: number; checkedIn: number; revenueUgx: number };
+      };
+      hardcopy: {
+        ordinary: { total: number; unactivated: number; activated: number; voided: number; checkedIn: number; revenueUgx: number };
+        vip: { total: number; unactivated: number; activated: number; voided: number; checkedIn: number; revenueUgx: number };
+      };
+    };
+    error?: string;
+    message?: string;
+  }> {
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, error: 'SUPABASE_NOT_CONFIGURED', message: configError || 'Database not connected.' };
+    }
+
+    try {
+      let rows: Array<{
+        ticket_number: string;
+        category: 'VIP' | 'ORDINARY';
+        price_ugx: number;
+        status: string;
+        payment_status: string;
+        checked_in_at: string | null;
+        ticket_channel?: string | null;
+      }> | null = null;
+
+      const primary = await client
+        .from('tickets')
+        .select('ticket_number, category, price_ugx, status, payment_status, checked_in_at, ticket_channel');
+
+      if (primary.error && isMissingColumnError(primary.error, 'ticket_channel')) {
+        const fallback = await client
+          .from('tickets')
+          .select('ticket_number, category, price_ugx, status, payment_status, checked_in_at');
+        if (fallback.error) {
+          return { success: false, error: 'DATABASE_ERROR', message: 'Unable to load ticket summary.' };
+        }
+        rows = fallback.data as any;
+      } else if (primary.error) {
+        return { success: false, error: 'DATABASE_ERROR', message: 'Unable to load ticket summary.' };
+      } else {
+        rows = primary.data as any;
+      }
+
+      const list = rows || [];
+      const onlineRows = list.filter((r) => isOnlineTicketRow(r));
+      const hardcopyRows = list.filter((r) => !isOnlineTicketRow(r));
+
+      const buildOnlineTier = (cat: 'VIP' | 'ORDINARY') => {
+        const subset = onlineRows.filter((r) => r.category === cat);
+        const paidIssued = subset.filter(
+          (r) => r.status === 'issued' && (r.payment_status === 'paid' || r.payment_status === 'manual_paid')
+        );
+        return {
+          total: subset.length,
+          available: subset.filter((r) => r.status === 'available').length,
+          reserved: subset.filter((r) => r.status === 'reserved').length,
+          issued: subset.filter((r) => r.status === 'issued').length,
+          checkedIn: subset.filter((r) => Boolean(r.checked_in_at)).length,
+          revenueUgx: paidIssued.reduce((sum, r) => sum + Number(r.price_ugx || 0), 0),
+        };
+      };
+
+      const buildHardcopyTier = (cat: 'VIP' | 'ORDINARY') => {
+        const subset = hardcopyRows.filter((r) => r.category === cat);
+        const activated = subset.filter(
+          (r) => r.status === 'issued' && (r.payment_status === 'paid' || r.payment_status === 'manual_paid')
+        );
+        return {
+          total: subset.length,
+          unactivated: subset.filter((r) => r.status === 'available').length,
+          activated: activated.length,
+          voided: subset.filter((r) => r.status === 'cancelled').length,
+          checkedIn: subset.filter((r) => Boolean(r.checked_in_at)).length,
+          revenueUgx: activated.reduce((sum, r) => sum + Number(r.price_ugx || 0), 0),
+        };
+      };
+
+      return {
+        success: true,
+        summary: {
+          online: {
+            ordinary: buildOnlineTier('ORDINARY'),
+            vip: buildOnlineTier('VIP'),
+          },
+          hardcopy: {
+            ordinary: buildHardcopyTier('ORDINARY'),
+            vip: buildHardcopyTier('VIP'),
+          },
+        },
+      };
+    } catch {
+      return { success: false, error: 'DATABASE_ERROR', message: 'Failed to compute inventory summary.' };
+    }
+  },
+
+  /**
+   * Gate-Scoped Recent Check-Ins (Minimal fields only — never exposes qr_token, email, phone, or order_ref)
+   */
+  async getRecentCheckInsGate(limit = 10): Promise<{
+    success: boolean;
+    checkIns: Array<{
+      ticketNumber: string;
+      category: 'VIP' | 'ORDINARY';
+      channel: 'online' | 'hardcopy';
+      guestLabel: string;
+      checkedInAt: string;
+    }>;
+    error?: string;
+  }> {
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, checkIns: [], error: configError || 'Database offline.' };
+    }
+
+    const bounded = Math.max(1, Math.min(30, Math.floor(Number(limit) || 10)));
+
+    try {
+      let rows: Array<{
+        ticket_number: string;
+        category: 'VIP' | 'ORDINARY';
+        buyer_name: string | null;
+        checked_in_at: string | null;
+        ticket_channel?: string | null;
+      }> | null = null;
+
+      const primary = await client
+        .from('tickets')
+        .select('ticket_number, category, buyer_name, checked_in_at, ticket_channel')
+        .not('checked_in_at', 'is', null)
+        .order('checked_in_at', { ascending: false })
+        .limit(bounded);
+
+      if (primary.error && isMissingColumnError(primary.error, 'ticket_channel')) {
+        const fallback = await client
+          .from('tickets')
+          .select('ticket_number, category, buyer_name, checked_in_at')
+          .not('checked_in_at', 'is', null)
+          .order('checked_in_at', { ascending: false })
+          .limit(bounded);
+        if (fallback.error) {
+          return { success: false, checkIns: [], error: 'Unable to load recent check-ins.' };
+        }
+        rows = fallback.data as any;
+      } else if (primary.error) {
+        return { success: false, checkIns: [], error: 'Unable to load recent check-ins.' };
+      } else {
+        rows = primary.data as any;
+      }
+
+      const checkIns = (rows || [])
+        .filter((r) => Boolean(r.checked_in_at))
+        .map((r) => {
+          const channel: 'online' | 'hardcopy' =
+            r.ticket_channel === 'hardcopy' || inferTicketChannelFromNumber(r.ticket_number) === 'hardcopy'
+              ? 'hardcopy'
+              : 'online';
+          return {
+            ticketNumber: r.ticket_number,
+            category: r.category,
+            channel,
+            guestLabel: (r.buyer_name && r.buyer_name.trim()) || (channel === 'hardcopy' ? 'Hardcopy Pass' : 'Guest'),
+            checkedInAt: r.checked_in_at!,
+          };
+        });
+
+      return { success: true, checkIns };
+    } catch {
+      return { success: false, checkIns: [], error: 'Failed to load recent check-ins.' };
+    }
+  },
+
+  async confirmPaymentAdmin(ticketId: string): Promise<{
+    success: boolean;
+    httpStatus: number;
+    error?: string;
+    message: string;
+  }> {
+    const cleanId = String(ticketId || '').trim();
+    if (!UUID_STRICT_REGEX.test(cleanId)) {
+      return {
+        success: false,
+        httpStatus: 400,
+        error: 'VALIDATION_ERROR',
+        message: 'A valid ticket UUID is required.',
+      };
+    }
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        httpStatus: 503,
+        error: 'SUPABASE_NOT_CONFIGURED',
+        message: configError || 'Database offline.',
+      };
+    }
+
+    try {
+      const cols =
+        'id, ticket_number, category, price_ugx, status, payment_status, order_ref, relworx_internal_ref, mtn_transaction_id, ticket_channel';
+      const preMigrationCols =
+        'id, ticket_number, category, price_ugx, status, payment_status, order_ref, relworx_internal_ref, mtn_transaction_id';
+
+      let fetchRes = await client.from('tickets').select(cols).eq('id', cleanId).maybeSingle();
+      if (fetchRes.error && isMissingColumnError(fetchRes.error, 'ticket_channel')) {
+        fetchRes = await client.from('tickets').select(preMigrationCols).eq('id', cleanId).maybeSingle();
+      }
+
+      if (fetchRes.error) {
+        return {
+          success: false,
+          httpStatus: 503,
+          error: 'DATABASE_ERROR',
+          message: 'Unable to fetch ticket record from database.',
+        };
+      }
+
+      const ticket = fetchRes.data as Partial<TicketRow> | null;
+      if (!ticket || !ticket.ticket_number) {
+        return {
+          success: false,
+          httpStatus: 404,
+          error: 'TICKET_NOT_FOUND',
+          message: 'Ticket not found.',
+        };
+      }
+
+      // 1. Block hardcopy tickets strictly — hardcopy activation MUST go through /api/admin/hardcopy/activate with mandatory audit logging
+      if (!isOnlineTicketRow(ticket)) {
+        return {
+          success: false,
+          httpStatus: 400,
+          error: 'HARDCOPY_TICKET_FORBIDDEN',
+          message: 'Hardcopy tickets cannot be confirmed via /api/admin/confirm-payment. Use hardcopy activation with audit logging.',
+        };
+      }
+
+      if (ticket.status === 'issued' && (ticket.payment_status === 'paid' || ticket.payment_status === 'manual_paid')) {
+        return {
+          success: true,
+          httpStatus: 200,
+          message: 'Ticket is already confirmed and issued.',
+        };
+      }
+
+      if (!ticket.order_ref) {
+        return {
+          success: false,
+          httpStatus: 409,
+          error: 'MISSING_PAYMENT_EVIDENCE',
+          message: 'Cannot confirm payment: ticket has no associated order reference or verified payment evidence.',
+        };
+      }
+
+      // 2. Require verified payment evidence from the linked order or live Relworx provider status check
+      const orderInfo = await this.getOrderForPaymentVerification(ticket.order_ref);
+      if (!orderInfo.found || !orderInfo.order) {
+        return {
+          success: false,
+          httpStatus: 409,
+          error: 'MISSING_PAYMENT_EVIDENCE',
+          message: 'Cannot confirm payment: linked order record could not be verified.',
+        };
+      }
+
+      const order = orderInfo.order;
+      let paymentVerified = order.status === 'paid' || order.verification_status === 'verified';
+
+      if (!paymentVerified && (order.gateway === 'relworx' || order.payment_method === 'relworx_mobile_money')) {
+        if (!RelworxService.isConfigured()) {
+          return {
+            success: false,
+            httpStatus: 409,
+            error: 'MISSING_PAYMENT_EVIDENCE',
+            message: 'Cannot confirm Relworx payment: provider verification is not configured.',
+          };
+        }
+        const relCheck = await RelworxService.checkRequestStatus({
+          internalReference: order.relworx_internal_ref || ticket.relworx_internal_ref || undefined,
+          reference: order.order_ref,
+        });
+        const currencyOk = !relCheck.currency || String(relCheck.currency).toUpperCase() === 'UGX';
+        const amountOk =
+          relCheck.amount !== undefined &&
+          relCheck.amount !== null &&
+          Math.round(Number(relCheck.amount)) === Math.round(Number(order.total_amount_ugx));
+
+        if (relCheck.success && relCheck.status === 'success' && currencyOk && amountOk) {
+          paymentVerified = true;
+        }
+      }
+
+      if (!paymentVerified) {
+        return {
+          success: false,
+          httpStatus: 409,
+          error: 'MISSING_PAYMENT_EVIDENCE',
+          message:
+            'Payment has not been verified yet. Verify the MTN transaction via /api/admin/mtn-verify or confirm Relworx settlement first.',
+        };
+      }
+
+      const now = new Date().toISOString();
+      let updateRes = await client
         .from('tickets')
         .update({
           status: 'issued',
           payment_status: 'paid',
           paid_at: now,
         })
-        .eq('id', ticketId);
+        .eq('id', cleanId)
+        .eq('ticket_channel', 'online')
+        .select('id')
+        .maybeSingle();
 
-      if (!error && ticket?.order_ref) {
+      if (updateRes.error && isMissingColumnError(updateRes.error, 'ticket_channel')) {
+        updateRes = await client
+          .from('tickets')
+          .update({
+            status: 'issued',
+            payment_status: 'paid',
+            paid_at: now,
+          })
+          .eq('id', cleanId)
+          .select('id')
+          .maybeSingle();
+      }
+
+      if (updateRes.error || !updateRes.data) {
+        return {
+          success: false,
+          httpStatus: 503,
+          error: 'DATABASE_ERROR',
+          message: 'Failed to update ticket payment status.',
+        };
+      }
+
+      if (order.status !== 'paid') {
         await client
           .from('orders')
           .update({ status: 'paid', paid_at: now })
-          .eq('order_ref', ticket.order_ref);
+          .eq('order_ref', order.order_ref);
       }
 
-      return !error;
+      return {
+        success: true,
+        httpStatus: 200,
+        message: `Ticket ${ticket.ticket_number} payment confirmed and issued.`,
+      };
     } catch {
-      return false;
+      return {
+        success: false,
+        httpStatus: 500,
+        error: 'SERVER_ERROR',
+        message: 'Unexpected error confirming ticket payment.',
+      };
     }
   },
 
-  async releaseTicketAdmin(ticketId: string): Promise<boolean> {
-    const { client } = getSupabaseClient();
-    if (!client) return false;
+  async releaseTicketAdmin(ticketId: string): Promise<{
+    success: boolean;
+    httpStatus: number;
+    error?: string;
+    message: string;
+  }> {
+    const cleanId = String(ticketId || '').trim();
+    if (!UUID_STRICT_REGEX.test(cleanId)) {
+      return {
+        success: false,
+        httpStatus: 400,
+        error: 'VALIDATION_ERROR',
+        message: 'A valid ticket UUID is required.',
+      };
+    }
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        httpStatus: 503,
+        error: 'SUPABASE_NOT_CONFIGURED',
+        message: configError || 'Database offline.',
+      };
+    }
 
     try {
-      const { error } = await client
-        .from('tickets')
-        .update({
-          status: 'available',
-          payment_status: 'unpaid',
-          buyer_name: null,
-          buyer_email: null,
-          buyer_phone: null,
-          order_ref: null,
-          reserved_until: null,
-          paid_at: null,
-          checked_in_at: null,
-        })
-        .eq('id', ticketId);
+      const cols = 'id, ticket_number, status, checked_in_at, ticket_channel';
+      const preMigrationCols = 'id, ticket_number, status, checked_in_at';
 
-      return !error;
+      let fetchRes = await client.from('tickets').select(cols).eq('id', cleanId).maybeSingle();
+      if (fetchRes.error && isMissingColumnError(fetchRes.error, 'ticket_channel')) {
+        fetchRes = await client.from('tickets').select(preMigrationCols).eq('id', cleanId).maybeSingle();
+      }
+
+      if (fetchRes.error) {
+        return {
+          success: false,
+          httpStatus: 503,
+          error: 'DATABASE_ERROR',
+          message: 'Unable to fetch ticket record from database.',
+        };
+      }
+
+      const ticket = fetchRes.data as Partial<TicketRow> | null;
+      if (!ticket || !ticket.ticket_number) {
+        return {
+          success: false,
+          httpStatus: 404,
+          error: 'TICKET_NOT_FOUND',
+          message: 'Ticket not found.',
+        };
+      }
+
+      // 1. Block hardcopy tickets strictly — hardcopy returns/voids MUST use /api/admin/hardcopy/status with audit logging
+      if (!isOnlineTicketRow(ticket)) {
+        return {
+          success: false,
+          httpStatus: 400,
+          error: 'HARDCOPY_TICKET_FORBIDDEN',
+          message: 'Hardcopy tickets cannot be released via /api/admin/release-ticket. Use hardcopy return/void controls.',
+        };
+      }
+
+      // 2. Never release an admitted ticket or reset checked_in_at
+      if (ticket.checked_in_at) {
+        return {
+          success: false,
+          httpStatus: 409,
+          error: 'ALREADY_CHECKED_IN',
+          message: `Ticket ${ticket.ticket_number} has already been checked in at the gate and cannot be released or reset.`,
+        };
+      }
+
+      // Notice: checked_in_at is NEVER touched in the update payload, and .is('checked_in_at', null) enforces atomic safety
+      const resetPayload = {
+        status: 'available',
+        payment_status: 'unpaid',
+        buyer_name: null,
+        buyer_email: null,
+        buyer_phone: null,
+        order_ref: null,
+        reserved_until: null,
+        paid_at: null,
+      };
+
+      let updateRes = await client
+        .from('tickets')
+        .update(resetPayload)
+        .eq('id', cleanId)
+        .eq('ticket_channel', 'online')
+        .is('checked_in_at', null)
+        .select('id')
+        .maybeSingle();
+
+      if (updateRes.error && isMissingColumnError(updateRes.error, 'ticket_channel')) {
+        updateRes = await client
+          .from('tickets')
+          .update(resetPayload)
+          .eq('id', cleanId)
+          .is('checked_in_at', null)
+          .select('id')
+          .maybeSingle();
+      }
+
+      if (updateRes.error) {
+        return {
+          success: false,
+          httpStatus: 503,
+          error: 'DATABASE_ERROR',
+          message: 'Failed to release ticket.',
+        };
+      }
+
+      if (!updateRes.data) {
+        return {
+          success: false,
+          httpStatus: 409,
+          error: 'ALREADY_CHECKED_IN',
+          message: 'Ticket was concurrently checked in and cannot be released.',
+        };
+      }
+
+      return {
+        success: true,
+        httpStatus: 200,
+        message: `Ticket ${ticket.ticket_number} released back to online inventory.`,
+      };
     } catch {
-      return false;
+      return {
+        success: false,
+        httpStatus: 500,
+        error: 'SERVER_ERROR',
+        message: 'Unexpected error releasing ticket.',
+      };
     }
   },
 };

@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for adding 300 pre-printed hardcopy tickets (200 Ordinary ORD-051–ORD-250 at UGX 20,000 and 100 VIP VIP-021–VIP-120 at UGX 50,000) to Poolparty while preserving all 70 existing online tickets, separating online vs. hardcopy sales/inventory, adding A4 4-up and 210x68mm batch PDF printing, securing gate check-in behind a dedicated gate staff passcode with read-only guest verification, and preserving atomic duplicate-scan prevention without altering payment processing.",
+  "updatedAt":  "2026-10-27T22:02:00.074663322Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

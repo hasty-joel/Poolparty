@@ -22,7 +22,7 @@ import {
   AlertCircle,
   MessageCircle
 } from 'lucide-react';
-import { TicketService } from '../../lib/ticketService';
+import { TicketService, isOnlineTicketRecord } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
 import { TicketRecord, InventoryDashboardStats, TicketCategory } from '../../types/inventory';
 import { SUPABASE_CONFIG } from '../../lib/supabase';
@@ -92,12 +92,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [copiedSql, setCopiedSql] = useState(false);
 
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
   useEffect(() => {
     const savedToken = TicketService.getAdminToken();
-    if (savedToken) {
-      setPasscode(savedToken);
-      setIsAuthenticated(true);
-    }
+    if (!savedToken) return;
+
+    let active = true;
+    setIsAuthenticating(true);
+    TicketService.checkAdminHealth()
+      .then((health) => {
+        if (!active) return;
+        if (health.authErrorCode) {
+          TicketService.clearAdminToken();
+          setIsAuthenticated(false);
+          if (health.authErrorCode === 'ADMIN_AUTH_NOT_CONFIGURED') {
+            setAuthError('Admin authentication is not configured on the server.');
+          }
+          return;
+        }
+        setHealthData(health);
+        setIsAuthenticated(true);
+      })
+      .finally(() => {
+        if (active) setIsAuthenticating(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const loadData = async () => {
@@ -110,9 +133,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         TicketService.checkAdminHealth(),
       ]);
 
-      if (ticketsRes.error === 'UNAUTHORIZED' || ordersRes.error === 'UNAUTHORIZED') {
+      if (
+        ticketsRes.error === 'UNAUTHORIZED' ||
+        ordersRes.error === 'UNAUTHORIZED' ||
+        ticketsRes.error === 'RATE_LIMITED' ||
+        ticketsRes.error === 'ADMIN_AUTH_NOT_CONFIGURED'
+      ) {
+        TicketService.clearAdminToken();
         setIsAuthenticated(false);
-        setAuthError('Unauthorized. Passcode was rejected by server. Default master passcode: prince2026');
+        setPasscode('');
+        if (ticketsRes.error === 'ADMIN_AUTH_NOT_CONFIGURED') {
+          setAuthError('Admin authentication is not configured on the server.');
+        } else if (ticketsRes.error === 'RATE_LIMITED') {
+          setAuthError('Too many failed admin authentication attempts. Please wait before trying again.');
+        } else {
+          setAuthError('Unauthorized. Valid organizer admin passcode required.');
+        }
         return;
       }
 
@@ -259,23 +295,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [isAuthenticated]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passcode.trim()) {
-      setAuthError('Please enter the Admin passcode.');
+    if (!passcode.trim() || isAuthenticating) {
+      setAuthError('Please enter the organizer admin passcode.');
       return;
     }
-    TicketService.setAdminToken(passcode.trim());
-    setIsAuthenticated(true);
+
+    setIsAuthenticating(true);
     setAuthError('');
+    TicketService.setAdminToken(passcode.trim());
+
+    try {
+      const health = await TicketService.checkAdminHealth();
+      if (health.authErrorCode) {
+        TicketService.clearAdminToken();
+        setIsAuthenticated(false);
+        if (health.authErrorCode === 'ADMIN_AUTH_NOT_CONFIGURED') {
+          setAuthError('Admin authentication is not configured on the server.');
+        } else if (health.authErrorCode === 'RATE_LIMITED') {
+          setAuthError('Too many failed admin authentication attempts. Please wait before trying again.');
+        } else {
+          setAuthError('Invalid organizer admin passcode.');
+        }
+        return;
+      }
+
+      setPasscode('');
+      setHealthData(health);
+      setIsAuthenticated(true);
+    } catch {
+      TicketService.clearAdminToken();
+      setIsAuthenticated(false);
+      setAuthError('Unable to verify admin credentials right now.');
+    } finally {
+      setIsAuthenticating(false);
+    }
   };
 
   const handleConfirmPayment = async (ticket: TicketRecord) => {
-    const ok = await TicketService.confirmPayment(ticket.id);
-    if (ok) {
+    setActionError(null);
+    const res = await TicketService.confirmPaymentDetailed(ticket.id);
+    if (res.success) {
       setActionSuccess(`Payment confirmed & Ticket #${ticket.ticket_number} marked as ISSUED.`);
       loadData();
       setTimeout(() => setActionSuccess(null), 4000);
+    } else {
+      setActionError(res.message || 'Unable to confirm payment for this ticket.');
     }
   };
 
@@ -294,11 +360,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
     setConfirmReleaseId(null);
-    const ok = await TicketService.cancelTicket(ticket.id, true);
-    if (ok) {
+    setActionError(null);
+    const res = await TicketService.releaseTicketDetailed(ticket.id, true);
+    if (res.success) {
       setActionSuccess(`Ticket #${ticket.ticket_number} released back to Available inventory.`);
       loadData();
       setTimeout(() => setActionSuccess(null), 3000);
+    } else {
+      setActionError(res.message || 'Unable to release this ticket.');
     }
   };
 
@@ -345,7 +414,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const filteredTickets = tickets.filter((t) => {
+  const onlineTickets = tickets.filter(isOnlineTicketRecord);
+
+  const filteredTickets = onlineTickets.filter((t) => {
     const matchesSearch =
       t.ticket_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (t.buyer_name && t.buyer_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -492,7 +563,7 @@ notify pgrst, 'reload schema';`;
                 type="password"
                 value={passcode}
                 onChange={(e) => setPasscode(e.target.value)}
-                placeholder="Enter passcode (default: prince2026)"
+                placeholder="Enter server-configured admin passcode"
                 className="w-full px-3.5 sm:px-4 py-3 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-amber-400 font-mono transition-colors"
                 autoFocus
               />
@@ -500,14 +571,15 @@ notify pgrst, 'reload schema';`;
 
             <button
               type="submit"
-              className="w-full min-h-[46px] py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
+              disabled={isAuthenticating || !passcode.trim()}
+              className="w-full min-h-[46px] py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer"
             >
-              Sign In to Dashboard
+              {isAuthenticating ? 'Verifying...' : 'Sign In to Dashboard'}
             </button>
           </form>
 
           <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs text-slate-400">
-            <span>Passcode: <strong className="text-amber-300 font-mono">prince2026</strong></span>
+            <span>Authorized Organizers Only</span>
             <button
               onClick={onBack}
               className="text-cyan-400 hover:underline cursor-pointer py-1"
@@ -542,7 +614,7 @@ notify pgrst, 'reload schema';`;
                 </h1>
               </div>
               <p className="text-[11px] sm:text-xs text-slate-400 truncate">
-                Pre-Allocated 70 Tickets (20 VIP @ 50K | 50 ORD @ 20K) · Prince Resort
+                Pre-Allocated 70 Online Tickets (20 VIP @ 50K | 50 ORD @ 20K) · Prince Resort
               </p>
             </div>
           </div>
@@ -565,7 +637,11 @@ notify pgrst, 'reload schema';`;
             </button>
 
             <button
-              onClick={() => setIsAuthenticated(false)}
+              onClick={() => {
+                TicketService.clearAdminToken();
+                setPasscode('');
+                setIsAuthenticated(false);
+              }}
               className="px-3 py-2 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white text-xs font-semibold rounded-lg border border-white/10 cursor-pointer transition-colors"
             >
               Sign Out
@@ -780,7 +856,7 @@ notify pgrst, 'reload schema';`;
                   activeTab === 'inventory' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white bg-white/5'
                 }`}
               >
-                70 Inventory ({tickets.length})
+                70 Inventory ({onlineTickets.length})
               </button>
               <button
                 onClick={() => setActiveTab('orders')}
@@ -1725,12 +1801,12 @@ notify pgrst, 'reload schema';`;
                       </td>
                       <td className="py-3 px-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* If reserved & pending, allow payment confirmation */}
-                          {t.status === 'reserved' && (
+                          {/* If reserved & pending with order_ref, allow verified payment confirmation */}
+                          {t.status === 'reserved' && isOnlineTicketRecord(t) && (
                             <button
                               onClick={() => handleConfirmPayment(t)}
                               className="px-2.5 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded text-[10px] uppercase cursor-pointer"
-                              title="Mark as paid and issue"
+                              title="Confirm verified payment and issue"
                             >
                               Confirm Pay
                             </button>
@@ -1759,8 +1835,8 @@ notify pgrst, 'reload schema';`;
                             </button>
                           )}
 
-                          {/* Release back to available */}
-                          {t.status !== 'available' && (
+                          {/* Release back to available (never allowed on admitted or hardcopy passes) */}
+                          {t.status !== 'available' && !t.checked_in_at && isOnlineTicketRecord(t) && (
                             <button
                               onClick={() => handleReleaseTicket(t)}
                               className={`p-1 rounded cursor-pointer ${
@@ -2132,8 +2208,10 @@ notify pgrst, 'reload schema';`;
 MTN_MERCHANT_CODE=556677
 MTN_MERCHANT_NAME="Prince Resort Bunamwaya"
 
-# Admin Authentication
-ADMIN_PASSCODE=prince2026
+# Admin & Gate Authentication (minimum 12+ character strong secrets)
+ADMIN_PASSCODE=<replace-with-strong-admin-passcode>
+GATE_PASSCODE=<replace-with-distinct-gate-passcode>
+GATE_SESSION_SECRET=<replace-with-32-char-random-signing-secret>
 
 # Supabase Database (Project: Poolparty)
 SUPABASE_URL=https://your-project.supabase.co

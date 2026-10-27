@@ -1,40 +1,47 @@
 import React, { useState } from 'react';
-import { X, Search, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
+import { X, Search, CheckCircle2, AlertCircle, RefreshCw, ShieldCheck, Crown } from 'lucide-react';
 import { TicketService } from '../../lib/ticketService';
-import { TicketRecord } from '../../types/inventory';
+import { LookupTicketSummary, TicketRecord } from '../../types/inventory';
 
 interface TicketLookupModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSelectTicket: (ticket: TicketRecord) => void;
+  onSelectTicket?: (ticket: TicketRecord) => void;
 }
 
 export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
   isOpen,
   onClose,
-  onSelectTicket,
 }) => {
   const [contact, setContact] = useState('');
+  const [verification, setVerification] = useState('');
   const [loading, setLoading] = useState(false);
-  const [foundTickets, setFoundTickets] = useState<TicketRecord[] | null>(null);
+  const [foundTickets, setFoundTickets] = useState<LookupTicketSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!contact.trim()) return;
+    if (!contact.trim() || !verification.trim()) return;
 
     setLoading(true);
     setError(null);
     setFoundTickets(null);
 
     try {
-      const res = await TicketService.lookupTickets(contact.trim());
-      if (res.success && res.tickets && res.tickets.length > 0) {
+      const res = await TicketService.lookupTickets(contact.trim(), verification.trim());
+      if (!res.success) {
+        setError(res.message || 'Please check your order details and ownership verification.');
+        return;
+      }
+      if (res.tickets && res.tickets.length > 0) {
         setFoundTickets(res.tickets);
       } else {
-        setError('No issued tickets found for this phone number or order reference. Please check the number used during checkout.');
+        setError(
+          res.message ||
+            'No confirmed tickets matched the provided details. Please verify the phone/order reference and checkout email.'
+        );
       }
     } catch (err: any) {
       setError(err?.message || 'Error searching for ticket.');
@@ -54,7 +61,7 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
           <div className="flex items-center gap-2">
             <Search className="w-4 h-4 text-amber-400 shrink-0" />
             <h3 className="text-sm sm:text-base font-bold text-white font-display">
-              Retrieve My Purchased Tickets
+              Verify My Purchased Order
             </h3>
           </div>
           <button
@@ -69,19 +76,33 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
         {/* Content */}
         <div className="p-4 sm:p-6 space-y-4 overflow-y-auto max-h-[calc(94vh-65px)]">
           <p className="text-xs text-slate-400 leading-relaxed">
-            Enter the phone number you entered at checkout (e.g. <span className="font-mono text-slate-300">0775...</span>) or your order reference (e.g. <span className="font-mono text-slate-300">PP-RWX-...</span> or <span className="font-mono text-slate-300">PP-MOMO-...</span>).
+            Enter your checkout phone number (e.g. <span className="font-mono text-slate-300">0775 198 484</span>) or exact order reference (e.g. <span className="font-mono text-slate-300">PP-MTN-...</span> or <span className="font-mono text-slate-300">PP-RWX-...</span>), plus your checkout email address to verify ownership.
           </p>
 
           <form onSubmit={handleSearch} className="space-y-3">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Phone Number or Order Reference
+                Phone Number or Exact Order Reference
               </label>
               <input
                 type="text"
                 value={contact}
                 onChange={(e) => setContact(e.target.value)}
-                placeholder="e.g. 0775 198 484 or PP-..."
+                placeholder="e.g. 0775 198 484 or PP-MTN-..."
+                className="w-full px-3.5 py-3 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm min-h-[46px] focus:border-amber-400 focus:outline-none transition-colors font-mono"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Ownership Verification (Checkout Email or Matching Order Ref)
+              </label>
+              <input
+                type="text"
+                value={verification}
+                onChange={(e) => setVerification(e.target.value)}
+                placeholder="e.g. name@example.com"
                 className="w-full px-3.5 py-3 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm min-h-[46px] focus:border-amber-400 focus:outline-none transition-colors"
                 required
               />
@@ -89,15 +110,15 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
 
             <button
               type="submit"
-              disabled={loading || !contact.trim()}
-              className="w-full min-h-[44px] py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
+              disabled={loading || !contact.trim() || !verification.trim()}
+              className="w-full min-h-[44px] py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-colors"
             >
               {loading ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Search className="w-3.5 h-3.5" />
               )}
-              <span>{loading ? 'Searching...' : 'Find My Tickets'}</span>
+              <span>{loading ? 'Verifying Order...' : 'Verify My Passes'}</span>
             </button>
           </form>
 
@@ -112,38 +133,49 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
             <div className="space-y-3 pt-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Found {foundTickets.length} confirmed pass(es)</span>
+                <span>Verified {foundTickets.length} confirmed pass(es)</span>
               </div>
 
               <div className="space-y-2">
                 {foundTickets.map((t) => (
                   <div
-                    key={t.id}
-                    onClick={() => {
-                      onSelectTicket(t);
-                      onClose();
-                    }}
-                    className="p-3 sm:p-3.5 rounded-xl bg-[#080c14] border border-white/10 hover:border-amber-400/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 cursor-pointer transition-colors group"
+                    key={t.ticket_number}
+                    className="p-3 sm:p-3.5 rounded-xl bg-[#080c14] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
                   >
                     <div>
-                      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
                         t.category === 'VIP' ? 'bg-cyan-950 text-cyan-300 border border-cyan-800' : 'bg-slate-800 text-slate-300'
                       }`}>
-                        {t.category} Pass · #{t.ticket_number}
+                        {t.category === 'VIP' && <Crown className="w-3 h-3" />}
+                        <span>{t.category} Pass · #{t.ticket_number}</span>
                       </span>
-                      <h4 className="text-sm font-semibold text-white mt-1 group-hover:text-amber-300">
-                        {t.buyer_name}
+                      <h4 className="text-sm font-semibold text-white mt-1">
+                        {t.buyer_name || 'Confirmed Guest'}
                       </h4>
-                      <p className="text-[11px] text-slate-400">
-                        Status: {t.payment_status}
-                      </p>
+                      {t.order_ref && (
+                        <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                          Order: {t.order_ref}
+                        </p>
+                      )}
                     </div>
 
-                    <button className="w-full sm:w-auto px-3 py-2 rounded-lg bg-amber-400 text-slate-950 text-xs font-bold group-hover:bg-amber-300 transition-colors text-center min-h-[36px]">
-                      View & Download
-                    </button>
+                    <div className="text-left sm:text-right text-xs space-y-0.5">
+                      <span className="inline-block px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] font-bold uppercase">
+                        {t.payment_status === 'manual_paid' ? 'Paid (Verified)' : 'Paid & Issued'}
+                      </span>
+                      <p className={`text-[11px] font-semibold ${t.checked_in_at ? 'text-rose-400' : 'text-cyan-300'}`}>
+                        {t.checked_in_at ? 'Already Checked In' : 'Valid · Unused at Gate'}
+                      </p>
+                    </div>
                   </div>
                 ))}
+              </div>
+
+              <div className="p-3 rounded-xl bg-white/[0.03] border border-white/10 text-[11px] text-slate-400 flex items-start gap-2">
+                <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                <span>
+                  For attendee security, cryptographic QR tokens are never exposed in public lookup responses. Use the official PDF pass downloaded at checkout or sent via organizer WhatsApp delivery.
+                </span>
               </div>
             </div>
           )}
@@ -152,3 +184,4 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
     </div>
   );
 };
+

@@ -7,18 +7,35 @@ const TICKET_TEMPLATES = {
   vip: '/assets/aistudio/2_c9323f09.jpg',
 };
 
+const RENDERABLE_QR_TOKEN_REGEX = /^[A-Za-z0-9_-]{12,128}$/;
+
+export function isRenderableQrToken(rawToken: string | null | undefined): boolean {
+  if (!rawToken || typeof rawToken !== 'string') return false;
+  const trimmed = rawToken.trim();
+  if (!trimmed) return false;
+  if (trimmed.toUpperCase().includes('REDACTED')) return false;
+  if (trimmed.includes('[') || trimmed.includes(']')) return false;
+  return RENDERABLE_QR_TOKEN_REGEX.test(trimmed);
+}
+
 export const TicketRenderer = {
+  isRenderableQrToken,
+
   /**
    * Generates a high-resolution Canvas composite with Canva template + dynamic QR & Attendee data
    */
   async renderTicketToCanvas(ticket: TicketRecord): Promise<HTMLCanvasElement> {
+    if (!isRenderableQrToken(ticket?.qr_token)) {
+      throw new Error('Cannot render QR code: ticket QR token is redacted or unavailable.');
+    }
+
     const isVip = ticket.category === 'VIP';
     const primaryUrl = isVip ? TICKET_TEMPLATES.vip : TICKET_TEMPLATES.ordinary;
     const fallbackUrl = isVip ? '/public/assets/aistudio/2_c9323f09.jpg' : '/public/assets/aistudio/1_d9ab832d.jpg';
 
     // 1. Generate QR Code using the secure unguessable qr_token UUID
-    // The gate scanner verifies ?verify=<qr_token>
-    const verificationUrl = `${window.location.origin}?verify=${encodeURIComponent(ticket.qr_token)}`;
+    // Customer scans open read-only ?verify=<qr_token>; gate scanner extracts and checks in via staff session
+    const verificationUrl = `${window.location.origin}?verify=${encodeURIComponent(ticket.qr_token.trim())}`;
     const qrDataUrl = await QRCode.toDataURL(verificationUrl, {
       errorCorrectionLevel: 'H',
       margin: 1,

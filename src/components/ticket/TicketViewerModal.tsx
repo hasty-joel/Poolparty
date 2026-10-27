@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Download, Copy, Check, Share2, RefreshCw } from 'lucide-react';
+import { X, Download, Copy, Check, Share2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { TicketRecord } from '../../types/inventory';
-import { TicketRenderer } from '../../lib/ticketRenderer';
+import { TicketRenderer, isRenderableQrToken } from '../../lib/ticketRenderer';
 
 interface TicketViewerModalProps {
   ticket: TicketRecord | null;
@@ -14,11 +14,20 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
   const [canvasUrl, setCanvasUrl] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
+  const hasRenderableQr = Boolean(ticket && isRenderableQrToken(ticket.qr_token));
+
   useEffect(() => {
     if (!ticket) return;
 
+    if (!isRenderableQrToken(ticket.qr_token)) {
+      setCanvasUrl(null);
+      setLoading(false);
+      return;
+    }
+
     let isMounted = true;
     setLoading(true);
+    setCanvasUrl(null);
 
     TicketRenderer.renderTicketToCanvas(ticket)
       .then((canvas) => {
@@ -40,6 +49,7 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
   if (!ticket) return null;
 
   const handleDownloadPdf = async () => {
+    if (!hasRenderableQr) return;
     setDownloadingPdf(true);
     try {
       await TicketRenderer.generatePdfTicket(ticket);
@@ -51,6 +61,7 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
   };
 
   const handleDownloadPng = async () => {
+    if (!hasRenderableQr) return;
     try {
       await TicketRenderer.downloadTicketImage(ticket);
     } catch (err) {
@@ -58,17 +69,20 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
     }
   };
 
-  const verifyUrl = `${window.location.origin}?verify=${ticket.qr_token}`;
+  const verifyUrl = hasRenderableQr ? `${window.location.origin}?verify=${encodeURIComponent(ticket.qr_token)}` : '';
 
   const copyLink = () => {
+    if (!verifyUrl) return;
     navigator.clipboard.writeText(verifyUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const whatsAppShareHref = `https://wa.me/?text=${encodeURIComponent(
-    `Pool Party 2026 Ticket\n\nPass: #${ticket.ticket_number} (${ticket.category} Pass)\nGuest: ${ticket.buyer_name || 'Guest'}\nVerify Ticket: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026`
-  )}`;
+  const whatsAppShareHref = hasRenderableQr
+    ? `https://wa.me/?text=${encodeURIComponent(
+        `Pool Party 2026 Ticket\n\nPass: #${ticket.ticket_number} (${ticket.category} Pass)\nGuest: ${ticket.buyer_name || 'Guest'}\nVerify Ticket: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026`
+      )}`
+    : '';
 
   const guestName = ticket.buyer_name || 'Unassigned / Available';
 
@@ -103,7 +117,17 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
         <div className="p-3.5 sm:p-6 space-y-4 sm:space-y-6 overflow-y-auto max-h-[calc(94vh-65px)]">
           {/* Ticket Render Preview */}
           <div className="bg-[#080c14] p-2.5 sm:p-4 rounded-xl border border-white/10 flex flex-col items-center justify-center min-h-[180px]">
-            {loading ? (
+            {!hasRenderableQr ? (
+              <div className="flex flex-col items-center gap-2 text-center py-8 px-4 max-w-md">
+                <ShieldAlert className="w-6 h-6 text-amber-400" />
+                <p className="text-xs font-semibold text-amber-200">
+                  QR Code Protected (Token Redacted in This View)
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  For security, raw cryptographic QR tokens are redacted outside the authorized ticket issuance flow and cannot be regenerated here.
+                </p>
+              </div>
+            ) : loading ? (
               <div className="flex flex-col items-center gap-2 text-xs text-amber-300 py-8">
                 <RefreshCw className="w-5 h-5 animate-spin text-amber-400" />
                 <span>Rendering Canva pass overlay...</span>
@@ -126,43 +150,49 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
 
           {/* Action Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-white/10">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2 w-full sm:w-auto">
-              <button
-                onClick={handleDownloadPdf}
-                disabled={downloadingPdf || loading}
-                className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm uppercase cursor-pointer"
-              >
-                <Download className="w-4 h-4 shrink-0" />
-                <span>{downloadingPdf ? 'Generating PDF...' : 'Download Print PDF'}</span>
-              </button>
+            {hasRenderableQr ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap items-center gap-2 w-full sm:w-auto">
+                <button
+                  onClick={handleDownloadPdf}
+                  disabled={downloadingPdf || loading}
+                  className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm uppercase cursor-pointer"
+                >
+                  <Download className="w-4 h-4 shrink-0" />
+                  <span>{downloadingPdf ? 'Generating PDF...' : 'Download Print PDF'}</span>
+                </button>
 
-              <button
-                onClick={handleDownloadPng}
-                disabled={loading}
-                className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 border border-slate-700 cursor-pointer"
-              >
-                <Download className="w-4 h-4 text-slate-400 shrink-0" />
-                <span>Download PNG</span>
-              </button>
+                <button
+                  onClick={handleDownloadPng}
+                  disabled={loading}
+                  className="w-full sm:w-auto min-h-[44px] px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-2 border border-slate-700 cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>Download PNG</span>
+                </button>
 
-              <button
-                onClick={copyLink}
-                className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-white/10 cursor-pointer"
-              >
-                {copiedLink ? <Check className="w-4 h-4 text-emerald-400 shrink-0" /> : <Copy className="w-4 h-4 text-slate-400 shrink-0" />}
-                <span>{copiedLink ? 'Copied' : 'Copy Verify URL'}</span>
-              </button>
+                <button
+                  onClick={copyLink}
+                  className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-white/10 cursor-pointer"
+                >
+                  {copiedLink ? <Check className="w-4 h-4 text-emerald-400 shrink-0" /> : <Copy className="w-4 h-4 text-slate-400 shrink-0" />}
+                  <span>{copiedLink ? 'Copied' : 'Copy Verify URL'}</span>
+                </button>
 
-              <a
-                href={whatsAppShareHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Share2 className="w-4 h-4 shrink-0" />
-                <span>Share WhatsApp</span>
-              </a>
-            </div>
+                <a
+                  href={whatsAppShareHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Share2 className="w-4 h-4 shrink-0" />
+                  <span>Share WhatsApp</span>
+                </a>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400">
+                QR download &amp; share controls require an unredacted pass token.
+              </div>
+            )}
 
             <div className="text-left sm:text-right text-xs pt-1 sm:pt-0">
               <span className="text-slate-400 block text-[10px] uppercase">Payment Status</span>
@@ -184,7 +214,7 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
             </div>
             <div>
               <span className="text-slate-400 block text-[10px] uppercase">Phone</span>
-              <span className="text-slate-300 font-mono">{ticket.buyer_phone || 'N/A'}</span>
+              <span className="text-slate-300 font-mono">{ticket.buyer_phone || 'Protected / N/A'}</span>
             </div>
             <div>
               <span className="text-slate-400 block text-[10px] uppercase">Price</span>
@@ -203,7 +233,7 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
             <div className="sm:col-span-2">
               <span className="text-slate-400 block text-[10px] uppercase">Unique Gate Token (UUID)</span>
               <span className="text-[11px] font-mono text-cyan-300 truncate block">
-                {ticket.qr_token}
+                {hasRenderableQr ? ticket.qr_token : 'Protected (Redacted)'}
               </span>
             </div>
           </div>

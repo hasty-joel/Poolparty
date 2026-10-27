@@ -6,13 +6,21 @@
 
 export type TicketCategory = 'VIP' | 'ORDINARY';
 
+export type TicketChannel = 'online' | 'hardcopy';
+
 export type TicketDbStatus = 'available' | 'reserved' | 'issued' | 'cancelled';
 
 export type PaymentDbStatus = 'unpaid' | 'pending' | 'paid' | 'failed' | 'refunded' | 'manual_paid';
 
+export type HardcopyAuditAction =
+  | 'activate_single'
+  | 'activate_range'
+  | 'deactivate_return'
+  | 'void_cancel';
+
 export interface TicketRecord {
   id: string; // uuid
-  ticket_number: string; // 'VIP-001' to 'VIP-020' or 'ORD-001' to 'ORD-050'
+  ticket_number: string; // Online: VIP-001..020, ORD-001..050 | Hardcopy: VIP-021..120, ORD-051..250
   category: TicketCategory;
   price_ugx: number;
   status: TicketDbStatus;
@@ -24,6 +32,11 @@ export interface TicketRecord {
   created_at: string;
   paid_at: string | null;
   checked_in_at: string | null;
+  ticket_channel?: TicketChannel;
+  assigned_agent?: string | null;
+  activated_by?: string | null;
+  activated_at?: string | null;
+  hardcopy_batch_ref?: string | null;
   order_ref?: string | null;
   reserved_until?: string | null;
   mtn_transaction_id?: string | null;
@@ -49,7 +62,7 @@ export interface InventoryDashboardStats {
   ordinary: CategoryStats;
   vip: CategoryStats;
   overall: {
-    totalCapacity: 70;
+    totalCapacity: number;
     totalAvailable: number;
     totalReserved: number;
     totalIssued: number;
@@ -60,10 +73,58 @@ export interface InventoryDashboardStats {
 }
 
 export interface CheckInResult {
-  status: 'ADMITTED' | 'ALREADY_USED' | 'UNPAID' | 'NOT_ISSUED' | 'CANCELLED' | 'INVALID';
+  status: 'ADMITTED' | 'ALREADY_USED' | 'UNPAID' | 'NOT_ISSUED' | 'CANCELLED' | 'INVALID' | 'UNAUTHORIZED';
+  error?: string;
   message: string;
   ticket?: TicketRecord;
   checkedInAt?: string;
+}
+
+export interface LookupTicketSummary {
+  ticket_number: string;
+  category: TicketCategory;
+  price_ugx: number;
+  status: 'issued';
+  payment_status: 'paid' | 'manual_paid';
+  buyer_name: string | null;
+  order_ref: string | null;
+  paid_at: string | null;
+  checked_in_at: string | null;
+}
+
+export type PublicTicketValidityStatus =
+  | 'VALID_UNUSED'
+  | 'INACTIVE'
+  | 'ALREADY_USED'
+  | 'CANCELLED'
+  | 'INVALID';
+
+export interface PublicTicketValidityResult {
+  success: boolean;
+  valid: boolean;
+  status: PublicTicketValidityStatus;
+  message: string;
+  ticketNumber?: string;
+  category?: TicketCategory;
+  channel?: TicketChannel;
+  checkedIn?: boolean;
+}
+
+export interface HardcopyAuditLogRecord {
+  id: string;
+  batch_ref: string;
+  action: HardcopyAuditAction;
+  category: TicketCategory;
+  ticket_numbers: string[];
+  quantity: number;
+  unit_price_ugx: number;
+  total_amount_ugx: number;
+  agent_or_seller: string;
+  buyer_name: string | null;
+  buyer_phone: string | null;
+  performed_by: string;
+  notes: string | null;
+  created_at: string;
 }
 
 export interface PublicInventoryCounts {
@@ -80,4 +141,5 @@ export interface PublicInventoryCounts {
   totalAvailable: number;
   isLiveSupabase: boolean;
 }
+
 

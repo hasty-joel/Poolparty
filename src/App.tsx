@@ -13,25 +13,36 @@ import { Footer } from './components/Footer';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { GateScanner } from './components/scanner/GateScanner';
 import { TicketViewerModal } from './components/ticket/TicketViewerModal';
+import { PublicTicketVerifyPage } from './components/ticket/PublicTicketVerifyPage';
 import { FlyerModal } from './components/FlyerModal';
 import { TicketRecord } from './types/inventory';
 
-type AppView = 'public' | 'admin' | 'scanner';
+type AppView = 'public' | 'admin' | 'scanner' | 'verify';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('public');
+  const [verifyToken, setVerifyToken] = useState<string>('');
   const [activeTicket, setActiveTicket] = useState<TicketRecord | null>(null);
   const [flyerModalOpen, setFlyerModalOpen] = useState(false);
 
-  // Check URL query parameters for direct routing (e.g. ?verify=vtok_... or ?admin=true)
+  // Check URL query parameters for direct routing (?verify=<uuid> -> public read-only validity page; ?admin=true -> admin login)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('verify')) {
-      setCurrentView('scanner');
+    const tokenParam = params.get('verify');
+    if (tokenParam && tokenParam.trim()) {
+      setVerifyToken(tokenParam.trim());
+      setCurrentView('verify');
     } else if (params.get('admin') === 'true') {
       setCurrentView('admin');
     }
   }, []);
+
+  const clearVerifyUrlAndGo = (nextView: AppView) => {
+    if (window.location.search.includes('verify=')) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    setCurrentView(nextView);
+  };
 
   const scrollToTickets = () => {
     if (currentView !== 'public') {
@@ -47,6 +58,19 @@ export default function App() {
       el.scrollIntoView({ behavior: 'smooth' });
     }
   };
+
+  // Public read-only QR pass validity check (?verify=<qr_token>)
+  if (currentView === 'verify') {
+    return (
+      <div className="min-h-screen bg-[#080c14] text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200">
+        <PublicTicketVerifyPage
+          token={verifyToken}
+          onBack={() => clearVerifyUrlAndGo('public')}
+          onOpenStaffScanner={() => clearVerifyUrlAndGo('scanner')}
+        />
+      </div>
+    );
+  }
 
   // If Admin View is active
   if (currentView === 'admin') {
