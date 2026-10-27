@@ -26,6 +26,7 @@ export interface TicketRecord {
   checked_in_at: string | null;
   order_ref?: string | null;
   reserved_until?: string | null;
+  mtn_transaction_id?: string | null;
   relworx_internal_ref?: string | null;
   flw_transaction_id?: string | null;
 }

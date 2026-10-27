@@ -159,6 +159,14 @@ export const TicketRenderer = {
   },
 
   /**
+   * Generates a Data URL for instant rendering in img tags or previews
+   */
+  async renderTicketToDataUrl(ticket: TicketRecord): Promise<string> {
+    const canvas = await this.renderTicketToCanvas(ticket);
+    return canvas.toDataURL('image/jpeg', 0.95);
+  },
+
+  /**
    * Generates a downloadable personalized print-ready PDF (Single Ticket)
    */
   async generatePdfTicket(ticket: TicketRecord): Promise<void> {
@@ -174,6 +182,10 @@ export const TicketRenderer = {
 
     pdf.addImage(imgData, 'JPEG', 0, 0, 210, 68);
     pdf.save(`Pool_Party_2026_${ticket.category}_${ticket.ticket_number}.pdf`);
+  },
+
+  async downloadTicketPdf(ticket: TicketRecord): Promise<void> {
+    return this.generatePdfTicket(ticket);
   },
 
   /**

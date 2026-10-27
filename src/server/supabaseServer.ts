@@ -5,7 +5,8 @@ import {
   CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
   sanitizeDiagnosticText,
 } from './relworxService.js';
-import type { OrderRecord, OrderStatus, PaymentNetwork } from '../types/order.js';
+import { MtnMoMoService } from './mtnMoMoService.js';
+import type { OrderRecord, OrderStatus, PaymentNetwork, VerificationStatus } from '../types/order.js';
 
 dotenv.config();
 
@@ -27,6 +28,21 @@ type InitiationResult = {
 // Coalesces concurrent identical submissions to prevent duplicate orders and duplicate charges
 const _inFlightInitiations = new Map<string, Promise<InitiationResult>>();
 const _recentIdempotencyResults = new Map<string, { expiresAt: number; result: InitiationResult }>();
+
+interface MtnSubmissionRecord {
+  orderRef: string;
+  mtnTransactionId: string;
+  payerPhone: string;
+  verificationStatus: VerificationStatus;
+  submittedAt: string;
+  verifiedAt?: string;
+  verifiedBy?: string;
+  rejectionReason?: string;
+  notes?: string;
+}
+
+const _mtnSubmissionsByTxId = new Map<string, MtnSubmissionRecord>();
+const _mtnSubmissionsByOrderRef = new Map<string, MtnSubmissionRecord>();
 
 function sanitizeEnv(val: string | undefined): string | undefined {
   if (!val) return undefined;
@@ -138,6 +154,7 @@ export interface TicketRow {
   checked_in_at: string | null;
   order_ref?: string | null;
   reserved_until?: string | null;
+  mtn_transaction_id?: string | null;
   relworx_internal_ref?: string | null;
   flw_transaction_id?: string | null;
 }
@@ -387,6 +404,547 @@ export const SupabaseServerService = {
     } catch (err: any) {
       console.error('[Supabase getPublicCounts Exception]', err?.message || err);
       return { success: false, error: 'Unable to reach the ticketing database.' };
+    }
+  },
+
+  /**
+   * MTN Mobile Money Merchant Reservation:
+   * 1. Validates inputs & calculates trusted server price (UGX 20,000 Ordinary, UGX 50,000 VIP)
+   * 2. Atomically reserves tickets in Supabase with a 15-minute hold
+   * 3. Creates a pending order record with verification_status = 'unsubmitted'
+   * 4. Returns official MTN Merchant payment instructions and unique order reference
+   */
+  async initiateMtnMerchantReservation(params: {
+    category: 'VIP' | 'ORDINARY';
+    quantity: number;
+    buyerName: string;
+    buyerEmail: string;
+    buyerPhone: string;
+  }): Promise<{
+    success: boolean;
+    orderRef?: string;
+    reservedUntil?: string;
+    totalAmountUgx?: number;
+    category?: 'VIP' | 'ORDINARY';
+    quantity?: number;
+    merchantCode?: string;
+    merchantName?: string;
+    isConfigured?: boolean;
+    message: string;
+    error?: string;
+  }> {
+    const { category, quantity, buyerName, buyerEmail, buyerPhone } = params;
+
+    if (!quantity || quantity < 1 || quantity > 10) {
+      return {
+        success: false,
+        message: 'Invalid ticket quantity (minimum 1, maximum 10).',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    if (category !== 'VIP' && category !== 'ORDINARY') {
+      return {
+        success: false,
+        message: 'Invalid ticket category. Must be VIP or ORDINARY.',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    if (!buyerName || buyerName.trim().length < 2) {
+      return {
+        success: false,
+        message: 'Please provide your full legal name for the ticket.',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!buyerEmail || !emailRegex.test(buyerEmail.trim())) {
+      return {
+        success: false,
+        message: 'Please provide a valid email address.',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    const phoneCheck = MtnMoMoService.formatUgandaPhone(buyerPhone);
+    if (!phoneCheck.valid) {
+      return {
+        success: false,
+        message: 'Please enter a valid Uganda MTN Mobile Money phone number (e.g. 0775 198 484 or +256 775 198484).',
+        error: 'VALIDATION_ERROR',
+      };
+    }
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return {
+        success: false,
+        message: configError || 'Database offline. Cannot reserve tickets at this time.',
+        error: 'DATABASE_OFFLINE',
+      };
+    }
+
+    const unitPrice = category === 'VIP' ? 50000 : 20000;
+    const totalAmount = unitPrice * quantity;
+
+    // Release any stale expired reservations first
+    await this.releaseExpiredReservations();
+
+    // Generate unique order reference (e.g. PP-MTN-1729900000-1234)
+    const timestamp = Date.now();
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const orderRef = `PP-MTN-${timestamp}-${randomSuffix}`;
+    const reservedUntil = new Date(timestamp + 15 * 60 * 1000).toISOString(); // 15-minute hold
+
+    try {
+      // Find and atomically lock available tickets
+      const { data: available, error: fetchErr } = await client
+        .from('tickets')
+        .select('id, ticket_number')
+        .eq('category', category)
+        .eq('status', 'available')
+        .order('ticket_number', { ascending: true })
+        .limit(quantity);
+
+      if (fetchErr || !available || available.length < quantity) {
+        const count = available?.length || 0;
+        return {
+          success: false,
+          message: `Sold out or insufficient inventory. Only ${count} ${category} ticket(s) currently available.`,
+          error: 'INSUFFICIENT_INVENTORY',
+        };
+      }
+
+      const allocatedIds = available.map((t) => t.id);
+
+      // Lock tickets
+      const { error: lockErr } = await client
+        .from('tickets')
+        .update({
+          status: 'reserved',
+          payment_status: 'pending',
+          buyer_name: buyerName.trim(),
+          buyer_email: buyerEmail.trim(),
+          buyer_phone: buyerPhone.trim(),
+          order_ref: orderRef,
+          reserved_until: reservedUntil,
+        })
+        .in('id', allocatedIds)
+        .eq('status', 'available');
+
+      if (lockErr) {
+        console.error('[MTN Reservation Lock Error]', lockErr);
+        return {
+          success: false,
+          message: 'Could not lock ticket reservation in database.',
+          error: 'DATABASE_ERROR',
+        };
+      }
+
+      // Record pending order
+      const { error: orderErr } = await client.from('orders').insert({
+        order_ref: orderRef,
+        category,
+        quantity,
+        unit_price_ugx: unitPrice,
+        total_amount_ugx: totalAmount,
+        status: 'pending',
+        verification_status: 'unsubmitted',
+        payment_method: 'mtn_momo_merchant',
+        gateway: 'mtn_momo',
+        network: 'MTN',
+        buyer_name: buyerName.trim(),
+        buyer_email: buyerEmail.trim(),
+        buyer_phone: buyerPhone.trim(),
+        reserved_until: reservedUntil,
+      });
+
+      if (orderErr) {
+        if (!isMissingRelationError(orderErr, 'orders')) {
+          console.warn('[Supabase orders insert warning]', orderErr.message);
+        }
+      }
+
+      const merchantCode = MtnMoMoService.getMerchantCode();
+      const merchantName = MtnMoMoService.getMerchantName();
+      const isConfigured = MtnMoMoService.isConfigured();
+
+      return {
+        success: true,
+        orderRef,
+        reservedUntil,
+        totalAmountUgx: totalAmount,
+        category,
+        quantity,
+        merchantCode,
+        merchantName,
+        isConfigured,
+        message: 'Pass reserved for 15 minutes. Pay to the MTN Merchant Code and submit your transaction ID.',
+      };
+    } catch (err: any) {
+      console.error('[MTN Reservation Exception]', err?.message || err);
+      return {
+        success: false,
+        message: 'Server error while creating ticket reservation.',
+        error: 'SERVER_ERROR',
+      };
+    }
+  },
+
+  /**
+   * Submit MTN Transaction ID for Admin Verification:
+   * 1. Validates transaction ID format and checks for duplicate reuse
+   * 2. Prevents duplicate transaction IDs across all orders and tickets
+   * 3. Sets verification_status = 'pending_verification'
+   * 4. NEVER marks as paid or issues QR codes on submission!
+   */
+  async submitMtnTransaction(params: {
+    orderRef: string;
+    mtnTransactionId: string;
+    payerPhone: string;
+    notes?: string;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    orderRef?: string;
+    verificationStatus?: VerificationStatus;
+    mtnTransactionId?: string;
+    error?: string;
+  }> {
+    const { orderRef, mtnTransactionId, payerPhone, notes } = params;
+
+    if (!orderRef || typeof orderRef !== 'string') {
+      return { success: false, message: 'Order reference is required.', error: 'INVALID_ORDER_REF' };
+    }
+
+    const txCheck = MtnMoMoService.sanitizeTransactionId(mtnTransactionId);
+    if (!txCheck.valid) {
+      return { success: false, message: txCheck.error || 'Invalid MTN Transaction ID.', error: 'INVALID_TRANSACTION_ID' };
+    }
+    const cleanTxId = txCheck.cleaned;
+
+    const phoneCheck = MtnMoMoService.formatUgandaPhone(payerPhone);
+    const cleanPhone = phoneCheck.valid ? phoneCheck.msisdn : payerPhone.trim();
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, message: configError || 'Database offline.', error: 'DATABASE_OFFLINE' };
+    }
+
+    // Try stored procedure first if available
+    try {
+      const { data: rpcRes, error: rpcErr } = await client.rpc('submit_mtn_payment', {
+        p_order_ref: orderRef,
+        p_mtn_transaction_id: cleanTxId,
+        p_payer_phone: cleanPhone,
+        p_notes: notes || null,
+      });
+
+      if (!rpcErr && rpcRes) {
+        return rpcRes;
+      }
+    } catch {
+      // Fallback to table queries
+    }
+
+    // Memory-level duplicate prevention (works even if migration is not yet run in remote Supabase)
+    const memSub = _mtnSubmissionsByTxId.get(cleanTxId);
+    if (memSub && memSub.orderRef !== orderRef && memSub.verificationStatus !== 'rejected') {
+      return {
+        success: false,
+        error: 'DUPLICATE_TRANSACTION_ID',
+        message: 'This MTN Transaction ID has already been submitted for another order. Each payment transaction ID can only be registered once.',
+      };
+    }
+
+    try {
+      // 1. DUPLICATE CHECK: Verify that this mtn_transaction_id has NOT been used by any other order
+      const { data: existingTxOrders } = await client
+        .from('orders')
+        .select('order_ref, status')
+        .ilike('mtn_transaction_id', cleanTxId)
+        .neq('order_ref', orderRef)
+        .limit(1);
+
+      if (existingTxOrders && existingTxOrders.length > 0) {
+        return {
+          success: false,
+          error: 'DUPLICATE_TRANSACTION_ID',
+          message: 'This MTN Transaction ID has already been submitted for another order. Each payment transaction ID can only be registered once.',
+        };
+      }
+
+      // Check tickets table as well
+      const { data: existingTxTickets } = await client
+        .from('tickets')
+        .select('order_ref')
+        .ilike('mtn_transaction_id', cleanTxId)
+        .neq('order_ref', orderRef)
+        .limit(1);
+
+      if (existingTxTickets && existingTxTickets.length > 0) {
+        return {
+          success: false,
+          error: 'DUPLICATE_TRANSACTION_ID',
+          message: 'This MTN Transaction ID is already associated with another ticket issuance.',
+        };
+      }
+
+      // 2. Fetch target order
+      const { data: order, error: orderErr } = await client
+        .from('orders')
+        .select('*')
+        .eq('order_ref', orderRef)
+        .maybeSingle();
+
+      if (orderErr && !isMissingRelationError(orderErr, 'orders')) {
+        console.warn('[Submit MTN Order Fetch Error]', orderErr);
+      }
+
+      if (order && order.status === 'paid') {
+        return {
+          success: true,
+          orderRef,
+          message: 'Order is already verified and paid. Your tickets are issued.',
+          verificationStatus: 'verified',
+        };
+      }
+
+      // 3. Update order with pending verification state
+      let updatedOrders = false;
+      if (order) {
+        const updatePayload: Record<string, any> = {
+          mtn_transaction_id: cleanTxId,
+          payer_phone: cleanPhone,
+          verification_status: 'pending_verification',
+        };
+        if (notes) updatePayload.submission_notes = notes;
+
+        const { error: updErr } = await client
+          .from('orders')
+          .update(updatePayload)
+          .eq('order_ref', orderRef);
+
+        if (!updErr) updatedOrders = true;
+      }
+
+      // 4. Update tickets with mtn_transaction_id (remains reserved, NOT paid!)
+      await client
+        .from('tickets')
+        .update({
+          mtn_transaction_id: cleanTxId,
+        })
+        .eq('order_ref', orderRef);
+
+      // Record in memory tracker for instant deduplication and dashboard visibility
+      const subRecord: MtnSubmissionRecord = {
+        orderRef,
+        mtnTransactionId: cleanTxId,
+        payerPhone: cleanPhone,
+        verificationStatus: 'pending_verification',
+        submittedAt: new Date().toISOString(),
+        notes,
+      };
+      _mtnSubmissionsByTxId.set(cleanTxId, subRecord);
+      _mtnSubmissionsByOrderRef.set(orderRef, subRecord);
+
+      return {
+        success: true,
+        orderRef,
+        verificationStatus: 'pending_verification',
+        mtnTransactionId: cleanTxId,
+        message: 'MTN payment submitted successfully! Our event admin will verify against the MTN Merchant portal before tickets are issued.',
+      };
+    } catch (err: any) {
+      console.error('[Submit MTN Transaction Exception]', err?.message || err);
+      return {
+        success: false,
+        message: 'Unexpected error while submitting transaction ID. Please try again.',
+        error: 'SUBMISSION_ERROR',
+      };
+    }
+  },
+
+  /**
+   * Admin Verification of MTN Merchant Payment:
+   * Only called after admin verifies transaction ID against real MTN merchant SMS/portal.
+   * Atomically marks order as 'paid', issues tickets, and activates QR codes.
+   */
+  async verifyMtnPaymentAdmin(params: {
+    orderRef: string;
+    adminName?: string;
+    notes?: string;
+  }): Promise<{ success: boolean; message: string; error?: string }> {
+    const { orderRef, adminName = 'Admin' } = params;
+
+    const { client, configError } = getSupabaseClient();
+    if (!client) {
+      return { success: false, message: configError || 'Database offline.', error: 'DATABASE_OFFLINE' };
+    }
+
+    // Try RPC first
+    try {
+      const { data: rpcRes, error: rpcErr } = await client.rpc('verify_mtn_payment_admin', {
+        p_order_ref: orderRef,
+        p_admin_name: adminName,
+      });
+
+      if (!rpcErr && rpcRes && rpcRes.success) {
+        return rpcRes;
+      }
+    } catch {
+      // Proceed to direct update
+    }
+
+    const now = new Date().toISOString();
+
+    try {
+      // Get order
+      const { data: order } = await client
+        .from('orders')
+        .select('*')
+        .eq('order_ref', orderRef)
+        .maybeSingle();
+
+      const txId = order?.mtn_transaction_id || null;
+
+      // Update order to paid
+      await client
+        .from('orders')
+        .update({
+          status: 'paid',
+          verification_status: 'verified',
+          paid_at: now,
+          verified_at: now,
+          verified_by: adminName,
+        })
+        .eq('order_ref', orderRef);
+
+      // Update memory record
+      const memSub = _mtnSubmissionsByOrderRef.get(orderRef);
+      if (memSub) {
+        memSub.verificationStatus = 'verified';
+        memSub.verifiedAt = now;
+        memSub.verifiedBy = adminName;
+      }
+
+      // Issue tickets atomically
+      const ticketUpdate: Record<string, any> = {
+        status: 'issued',
+        payment_status: 'paid',
+        paid_at: now,
+      };
+      if (txId) ticketUpdate.mtn_transaction_id = txId;
+
+      let { error: ticketErr } = await client
+        .from('tickets')
+        .update(ticketUpdate)
+        .eq('order_ref', orderRef);
+
+      if (ticketErr && (ticketErr.code === 'PGRST204' || ticketErr.code === '42703')) {
+        const fallback = await client
+          .from('tickets')
+          .update({
+            status: 'issued',
+            payment_status: 'paid',
+            paid_at: now,
+          })
+          .eq('order_ref', orderRef);
+        ticketErr = fallback.error;
+      }
+
+      if (ticketErr) {
+        console.error('[Verify MTN Ticket Update Error]', ticketErr);
+        return { success: false, message: 'Failed to update ticket records to issued in database.' };
+      }
+
+      return {
+        success: true,
+        message: `MTN payment verified for Order ${orderRef}. Official QR tickets have been activated and issued.`,
+      };
+    } catch (err: any) {
+      console.error('[Verify MTN Admin Exception]', err?.message || err);
+      return { success: false, message: 'Server error while verifying MTN payment.' };
+    }
+  },
+
+  /**
+   * Admin Rejection of MTN Merchant Payment:
+   * Called if transaction ID is invalid, fake, unconfirmed, or underpaid.
+   * Marks order as 'failed' and releases reserved tickets back to available capacity immediately.
+   */
+  async rejectMtnPaymentAdmin(params: {
+    orderRef: string;
+    reason: string;
+    adminName?: string;
+  }): Promise<{ success: boolean; message: string }> {
+    const { orderRef, reason, adminName = 'Admin' } = params;
+
+    const { client } = getSupabaseClient();
+    if (!client) {
+      return { success: false, message: 'Database offline.' };
+    }
+
+    try {
+      // 0. Update memory tracking record
+      const memSub = _mtnSubmissionsByOrderRef.get(orderRef);
+      if (memSub) {
+        memSub.verificationStatus = 'rejected';
+        memSub.rejectionReason = reason.trim() || 'Payment not matched in MTN merchant account.';
+      }
+
+      // 1. Update order status to failed / rejected
+      await client
+        .from('orders')
+        .update({
+          status: 'failed',
+          verification_status: 'rejected',
+          rejection_reason: reason.trim() || 'Payment not matched in MTN merchant account.',
+          verified_by: adminName,
+        })
+        .eq('order_ref', orderRef);
+
+      // 2. Release reserved tickets back to inventory
+      let { error: releaseErr } = await client
+        .from('tickets')
+        .update({
+          status: 'available',
+          payment_status: 'unpaid',
+          buyer_name: null,
+          buyer_email: null,
+          buyer_phone: null,
+          order_ref: null,
+          reserved_until: null,
+          mtn_transaction_id: null,
+        })
+        .eq('order_ref', orderRef)
+        .eq('status', 'reserved');
+
+      if (releaseErr && (releaseErr.code === 'PGRST204' || releaseErr.code === '42703')) {
+        await client
+          .from('tickets')
+          .update({
+            status: 'available',
+            payment_status: 'unpaid',
+            buyer_name: null,
+            buyer_email: null,
+            buyer_phone: null,
+            order_ref: null,
+            reserved_until: null,
+          })
+          .eq('order_ref', orderRef)
+          .eq('status', 'reserved');
+      }
+
+      return {
+        success: true,
+        message: `Order ${orderRef} rejected (${reason}). Reserved tickets released back to available inventory.`,
+      };
+    } catch (err: any) {
+      console.error('[Reject MTN Admin Exception]', err?.message || err);
+      return { success: false, message: 'Error rejecting order.' };
     }
   },
 
@@ -1036,6 +1594,9 @@ export const SupabaseServerService = {
     totalAmountUgx?: number;
     reservedUntil?: string;
     secondsRemaining?: number;
+    verificationStatus?: 'unsubmitted' | 'pending_verification' | 'verified' | 'rejected';
+    mtnTransactionId?: string | null;
+    rejectionReason?: string | null;
   }> {
     const { client, configError } = getSupabaseClient();
     if (!client) {
@@ -1108,11 +1669,25 @@ export const SupabaseServerService = {
           success: true,
           orderRef,
           status: 'paid',
+          verificationStatus: order.verification_status || 'verified',
+          mtnTransactionId: order.mtn_transaction_id || null,
           buyerName: order.buyer_name,
           category: order.category,
           quantity: order.quantity,
           totalAmountUgx: order.total_amount_ugx,
           tickets: (tickets as TicketRow[]) || [],
+        };
+      }
+
+      if (order.status === 'failed' || order.verification_status === 'rejected') {
+        return {
+          success: false,
+          orderRef,
+          status: 'failed',
+          verificationStatus: 'rejected',
+          rejectionReason: order.rejection_reason || 'Payment was declined or rejected.',
+          message: order.rejection_reason || 'Payment was declined or rejected.',
+          tickets: [],
         };
       }
 
@@ -1124,11 +1699,13 @@ export const SupabaseServerService = {
           success: false,
           orderRef,
           status: 'expired',
-          message: 'Your 10-minute reservation window has expired. The tickets have been returned to available inventory.',
+          verificationStatus: order.verification_status || 'unsubmitted',
+          message: 'Your 15-minute reservation window has expired. The tickets have been returned to available inventory.',
+          tickets: [],
         };
       }
 
-      if (order.status === 'pending' && RelworxService.isConfigured()) {
+      if (order.status === 'pending' && RelworxService.isConfigured() && order.gateway === 'relworx') {
         try {
           const relCheck = await RelworxService.checkRequestStatus({
             internalReference: order.relworx_internal_ref || undefined,
@@ -1147,7 +1724,9 @@ export const SupabaseServerService = {
               success: false,
               orderRef,
               status: 'failed',
+              verificationStatus: 'rejected',
               message: relCheck.message || 'Payment prompt was cancelled or declined on handset.',
+              tickets: [],
             };
           }
         } catch (err) {
@@ -1156,11 +1735,15 @@ export const SupabaseServerService = {
       }
 
       const secondsRemaining = Math.max(0, Math.floor((expiry - now) / 1000));
+      const memSub = _mtnSubmissionsByOrderRef.get(orderRef);
 
       return {
         success: true,
         orderRef,
         status: order.status,
+        verificationStatus: order.verification_status || memSub?.verificationStatus || 'unsubmitted',
+        mtnTransactionId: order.mtn_transaction_id || memSub?.mtnTransactionId || null,
+        rejectionReason: order.rejection_reason || memSub?.rejectionReason || null,
         buyerName: order.buyer_name,
         category: order.category,
         quantity: order.quantity,
@@ -1488,14 +2071,106 @@ export const SupabaseServerService = {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) {
-        if (isMissingRelationError(error, 'orders')) {
-          return { success: true, orders: [] };
+      if (error && isMissingRelationError(error, 'orders')) {
+        // Synthesize orders from tickets table and memory submissions
+        const { data: ticketRows } = await client
+          .from('tickets')
+          .select('*')
+          .not('order_ref', 'is', null);
+
+        const orderMap = new Map<string, any>();
+        if (ticketRows) {
+          for (const t of ticketRows) {
+            const ref = t.order_ref;
+            if (!ref) continue;
+            if (!orderMap.has(ref)) {
+              const mtnSub = _mtnSubmissionsByOrderRef.get(ref);
+              const isPaid = t.status === 'issued' && (t.payment_status === 'paid' || t.payment_status === 'manual_paid');
+              orderMap.set(ref, {
+                id: ref,
+                order_ref: ref,
+                category: t.category,
+                quantity: 1,
+                unit_price_ugx: t.price_ugx,
+                total_amount_ugx: t.price_ugx,
+                status: isPaid ? 'paid' : t.status === 'cancelled' ? 'cancelled' : 'pending',
+                verification_status: mtnSub?.verificationStatus || (isPaid ? 'verified' : 'unsubmitted'),
+                mtn_transaction_id: mtnSub?.mtnTransactionId || t.mtn_transaction_id || null,
+                payer_phone: mtnSub?.payerPhone || t.buyer_phone || null,
+                verified_at: mtnSub?.verifiedAt || t.paid_at || null,
+                verified_by: mtnSub?.verifiedBy || null,
+                rejection_reason: mtnSub?.rejectionReason || null,
+                payment_method: 'mtn_momo',
+                network: 'MTN',
+                buyer_name: t.buyer_name || 'Guest',
+                buyer_email: t.buyer_email || '',
+                buyer_phone: t.buyer_phone || '',
+                created_at: mtnSub?.submittedAt || t.created_at || new Date().toISOString(),
+                reserved_until: t.reserved_until,
+              });
+            } else {
+              const ord = orderMap.get(ref);
+              ord.quantity += 1;
+              ord.total_amount_ugx += t.price_ugx;
+            }
+          }
         }
+
+        // Add any memory submissions not in query
+        for (const [ref, sub] of _mtnSubmissionsByOrderRef.entries()) {
+          if (!orderMap.has(ref)) {
+            orderMap.set(ref, {
+              id: ref,
+              order_ref: ref,
+              category: 'ORDINARY',
+              quantity: 1,
+              unit_price_ugx: 20000,
+              total_amount_ugx: 20000,
+              status: sub.verificationStatus === 'verified' ? 'paid' : 'pending',
+              verification_status: sub.verificationStatus,
+              mtn_transaction_id: sub.mtnTransactionId,
+              payer_phone: sub.payerPhone,
+              verified_at: sub.verifiedAt || null,
+              verified_by: sub.verifiedBy || null,
+              rejection_reason: sub.rejectionReason || null,
+              payment_method: 'mtn_momo',
+              network: 'MTN',
+              buyer_name: 'Guest',
+              buyer_email: '',
+              buyer_phone: sub.payerPhone,
+              created_at: sub.submittedAt,
+            });
+          }
+        }
+
+        const synthList = Array.from(orderMap.values()).sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        return { success: true, orders: synthList as OrderRow[] };
+      }
+
+      if (error) {
         return { success: false, orders: [], error: 'Unable to fetch orders from database.' };
       }
 
-      return { success: true, orders: (data as OrderRow[]) || [] };
+      // Enrich orders with memory submissions if columns are null
+      const enriched = ((data as OrderRow[]) || []).map((ord) => {
+        const sub = _mtnSubmissionsByOrderRef.get(ord.order_ref);
+        if (sub) {
+          return {
+            ...ord,
+            verification_status: ord.verification_status || sub.verificationStatus,
+            mtn_transaction_id: ord.mtn_transaction_id || sub.mtnTransactionId,
+            payer_phone: ord.payer_phone || sub.payerPhone,
+            verified_at: ord.verified_at || sub.verifiedAt,
+            verified_by: ord.verified_by || sub.verifiedBy,
+            rejection_reason: ord.rejection_reason || sub.rejectionReason,
+          };
+        }
+        return ord;
+      });
+
+      return { success: true, orders: enriched };
     } catch {
       return { success: false, orders: [], error: 'Database query failed.' };
     }

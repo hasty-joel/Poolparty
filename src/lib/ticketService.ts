@@ -302,6 +302,163 @@ export const TicketService = {
   },
 
   /**
+   * Fetch MTN Mobile Money Merchant configuration and instructions
+   */
+  async getMtnConfig(): Promise<{
+    success: boolean;
+    configured: boolean;
+    merchantCode?: string;
+    merchantName?: string;
+    currency: 'UGX';
+    warning?: string;
+    instructions: {
+      ussdCode: string;
+      steps: string[];
+    };
+  }> {
+    const res = await fetchSafeJson<any>('/api/payments/mtn-config', { method: 'GET' }, DEFAULT_API_TIMEOUT_MS);
+    if (res.data && typeof res.data.configured === 'boolean') {
+      return res.data;
+    }
+    return {
+      success: false,
+      configured: false,
+      currency: 'UGX',
+      warning: 'Could not connect to payment server to retrieve MTN configuration.',
+      instructions: {
+        ussdCode: '*165*3#',
+        steps: ['MTN payment configuration is loading...'],
+      },
+    };
+  },
+
+  /**
+   * Initiate MTN Mobile Money Merchant Pass Reservation
+   * Enforces trusted server pricing (VIP UGX 50,000, Ordinary UGX 20,000)
+   * Locks tickets for 15 minutes and returns merchant payment instructions
+   */
+  async initiateMtnPayment(payload: {
+    category: TicketCategory;
+    quantity: number;
+    buyerName: string;
+    buyerEmail: string;
+    buyerPhone: string;
+  }): Promise<{
+    success: boolean;
+    orderRef?: string;
+    reservedUntil?: string;
+    totalAmountUgx?: number;
+    category?: TicketCategory;
+    quantity?: number;
+    merchantCode?: string;
+    merchantName?: string;
+    isConfigured?: boolean;
+    message: string;
+    error?: string;
+  }> {
+    const res = await fetchSafeJson<any>(
+      '/api/payments/mtn-reserve',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      PAYMENT_API_TIMEOUT_MS
+    );
+
+    if (res.data && typeof res.data.success === 'boolean') {
+      return res.data;
+    }
+
+    return {
+      success: false,
+      message: res.fallbackMessage || 'Network error while creating ticket reservation.',
+      error: 'NETWORK_ERROR',
+    };
+  },
+
+  /**
+   * Submit MTN Transaction ID for Admin Verification
+   * Customer submits ID from their MTN confirmation SMS.
+   * Does NOT issue tickets or mark paid until admin verifies!
+   */
+  async submitMtnTransaction(payload: {
+    orderRef: string;
+    mtnTransactionId: string;
+    payerPhone: string;
+    notes?: string;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    orderRef?: string;
+    verificationStatus?: string;
+    mtnTransactionId?: string;
+    error?: string;
+  }> {
+    const res = await fetchSafeJson<any>(
+      '/api/payments/mtn-submit',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+      PAYMENT_API_TIMEOUT_MS
+    );
+
+    if (res.data && typeof res.data.success === 'boolean') {
+      return res.data;
+    }
+
+    return {
+      success: false,
+      message: res.fallbackMessage || 'Network error while submitting transaction ID.',
+      error: 'NETWORK_ERROR',
+    };
+  },
+
+  /**
+   * Admin Verify MTN Payment (Protected)
+   * Marks order paid and generates active QR tokens
+   */
+  async verifyMtnPaymentAdmin(orderRef: string, adminName: string = 'Admin', notes?: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetchSafeJson<any>(
+      '/api/admin/verify-mtn-payment',
+      {
+        method: 'POST',
+        headers: this.getAdminHeaders(),
+        body: JSON.stringify({ orderRef, adminName, notes }),
+      },
+      PAYMENT_API_TIMEOUT_MS
+    );
+
+    if (res.data && typeof res.data.success === 'boolean') {
+      return res.data;
+    }
+    return { success: false, message: res.fallbackMessage || 'Failed to verify payment.' };
+  },
+
+  /**
+   * Admin Reject MTN Payment (Protected)
+   * Marks order rejected and releases reserved tickets
+   */
+  async rejectMtnPaymentAdmin(orderRef: string, reason: string, adminName: string = 'Admin'): Promise<{ success: boolean; message: string }> {
+    const res = await fetchSafeJson<any>(
+      '/api/admin/reject-mtn-payment',
+      {
+        method: 'POST',
+        headers: this.getAdminHeaders(),
+        body: JSON.stringify({ orderRef, reason, adminName }),
+      },
+      PAYMENT_API_TIMEOUT_MS
+    );
+
+    if (res.data && typeof res.data.success === 'boolean') {
+      return res.data;
+    }
+    return { success: false, message: res.fallbackMessage || 'Failed to reject payment.' };
+  },
+
+  /**
    * Initiate Relworx Uganda Mobile Money Checkout (MTN MoMo & Airtel Money)
    * Official Relworx API: https://payments.relworx.com/docs
    */
@@ -393,6 +550,9 @@ export const TicketService = {
     totalAmountUgx?: number;
     reservedUntil?: string;
     secondsRemaining?: number;
+    verificationStatus?: 'unsubmitted' | 'pending_verification' | 'verified' | 'rejected';
+    mtnTransactionId?: string;
+    rejectionReason?: string;
   }> {
     const res = await fetchSafeJson<any>(
       `/api/orders/${encodeURIComponent(orderRef)}/status`,

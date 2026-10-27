@@ -14,7 +14,7 @@ import {
 import { EVENT_DATA, TICKET_TIERS, TicketTier, BuyerForm } from '../types/event';
 import { TicketService } from '../lib/ticketService';
 import { TicketRecord, PublicInventoryCounts } from '../types/inventory';
-import { RelworxPaymentModal } from './payment/RelworxPaymentModal';
+import { MtnMerchantPaymentModal } from './payment/MtnMerchantPaymentModal';
 import { TicketLookupModal } from './ticket/TicketLookupModal';
 
 interface TicketPurchaseProps {
@@ -24,7 +24,7 @@ interface TicketPurchaseProps {
 export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPayment }) => {
   const [selectedTier, setSelectedTier] = useState<TicketTier>('ordinary');
   const [quantity, setQuantity] = useState<number>(1);
-  const [network, setNetwork] = useState<'MTN' | 'AIRTEL'>('MTN');
+  const [network, setNetwork] = useState<'MTN'>('MTN');
   const [form, setForm] = useState<BuyerForm>({
     fullName: '',
     email: '',
@@ -34,48 +34,37 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     paymentMethod: 'mtn_momo',
   });
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
-  const [providerUnavailableMsg, setProviderUnavailableMsg] = useState<string | null>(null);
-  const [retryCooldownSecs, setRetryCooldownSecs] = useState<number>(0);
-  const [hasFailedAttempt, setHasFailedAttempt] = useState<boolean>(false);
-  const [idempotencyKey, setIdempotencyKey] = useState<string>(() =>
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `pp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [publicCounts, setPublicCounts] = useState<PublicInventoryCounts | null>(null);
   const [loadingCounts, setLoadingCounts] = useState(true);
   const [countsError, setCountsError] = useState<string | null>(null);
 
-  // Relworx Checkout Modal State
-  const [checkoutModal, setCheckoutModal] = useState<{
+  // MTN Merchant Configuration
+  const [mtnConfig, setMtnConfig] = useState<{
+    configured: boolean;
+    merchantCode?: string;
+    merchantName?: string;
+    warning?: string;
+  } | null>(null);
+
+  // MTN MoMo Merchant Checkout Modal State
+  const [mtnModal, setMtnModal] = useState<{
     orderRef: string;
-    message: string;
+    message?: string;
     reservedUntil?: string | null;
     totalAmountUgx?: number;
     buyerName?: string;
     buyerPhone?: string;
-    network?: 'MTN' | 'AIRTEL';
+    buyerEmail?: string;
+    category?: 'VIP' | 'ORDINARY';
+    quantity?: number;
+    merchantCode?: string;
+    merchantName?: string;
+    isConfigured?: boolean;
   } | null>(null);
 
   // Ticket Lookup Modal State
   const [lookupOpen, setLookupOpen] = useState(false);
-
-  const rotateIdempotencyKey = () => {
-    setIdempotencyKey(
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `pp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-    );
-  };
-
-  useEffect(() => {
-    if (retryCooldownSecs <= 0) return;
-    const timer = setInterval(() => {
-      setRetryCooldownSecs((prev) => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [retryCooldownSecs]);
 
   const refreshCounts = async () => {
     setLoadingCounts(true);
@@ -93,6 +82,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
   useEffect(() => {
     refreshCounts();
+    TicketService.getMtnConfig().then(setMtnConfig);
   }, []);
 
   const tierInfo = TICKET_TIERS[selectedTier];
@@ -111,8 +101,6 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
   const handleTierChange = (tier: TicketTier) => {
     setSelectedTier(tier);
     setForm((prev) => ({ ...prev, tier }));
-    rotateIdempotencyKey();
-    setProviderUnavailableMsg(null);
     setErrors((prev) => {
       const next = { ...prev };
       delete next.inventory;
@@ -132,7 +120,6 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
       remainingInventory !== null && remainingInventory > 0 ? Math.min(10, remainingInventory) : 10;
     if (next >= 1 && next <= maxAllowed) {
       setQuantity(next);
-      rotateIdempotencyKey();
     }
   };
 
@@ -154,7 +141,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     else if (cleanedPhone.startsWith('0')) cleanedPhone = cleanedPhone.substring(1);
 
     if (!/^[73][0-9]{8}$/.test(cleanedPhone)) {
-      errs.phone = 'Please provide a valid Uganda Mobile Money number (e.g. 0775 198 484 or +256 701 234567).';
+      errs.phone = 'Please provide a valid Uganda MTN Mobile Money phone number (e.g. 0775 198 484).';
     }
 
     if (remainingInventory !== null && remainingInventory < quantity) {
@@ -170,76 +157,47 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting || retryCooldownSecs > 0) return;
+    if (isSubmitting) return;
     if (!validate()) return;
 
     setIsSubmitting(true);
     setErrors({});
-    setProviderUnavailableMsg(null);
 
     try {
-      const res = await TicketService.initiateRelworxPayment({
+      const res = await TicketService.initiateMtnPayment({
         category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
         quantity,
         buyerName: form.fullName.trim(),
         buyerEmail: form.email.trim(),
         buyerPhone: form.phone.trim(),
-        network,
-        idempotencyKey,
       });
 
       if (!res.success || !res.orderRef) {
-        setHasFailedAttempt(true);
-
-        // Rotate idempotencyKey ONLY when the server confirmed the reservation was released (not on uncertain network timeout)
-        if (res.error !== 'NETWORK_UNCERTAIN') {
-          rotateIdempotencyKey();
-        }
-
-        const isProviderDisabledOrUnavailable =
-          res.code === 'API_DISABLED' ||
-          res.error === 'PAYMENT_PROVIDER_UNAVAILABLE' ||
-          res.error === 'RELWORX_NOT_CONFIGURED';
-
-        if (isProviderDisabledOrUnavailable) {
-          const safeUnavailableMessage =
-            'Mobile Money payments are temporarily unavailable right now. You have not been charged, and your selected passes remain available. Please try again later.';
-          setProviderUnavailableMsg(safeUnavailableMessage);
-          // Prevent rapid repeated calls against a disabled API while allowing retry after short pause
-          const cooldown = Math.min(Math.max(res.retryAfterSeconds || 15, 10), 30);
-          setRetryCooldownSecs(cooldown);
-          return;
-        }
-
-        if (res.error === 'RATE_LIMITED') {
-          setRetryCooldownSecs(Math.min(res.retryAfterSeconds || 30, 60));
-        }
-
         setErrors({
-          inventory: res.message || 'Payment initiation failed. You have not been charged—please try again.',
+          inventory: res.message || 'Payment initiation failed. Please try again.',
         });
         return;
       }
 
-      setHasFailedAttempt(false);
-      setProviderUnavailableMsg(null);
-      rotateIdempotencyKey();
-
       // Refresh stock counts from database in background
       void refreshCounts();
 
-      // Open Relworx checkout modal ONLY when initiation genuinely succeeded with an orderRef
-      setCheckoutModal({
+      // Open MTN Merchant payment modal
+      setMtnModal({
         orderRef: res.orderRef,
         message: res.message,
         reservedUntil: res.reservedUntil,
         totalAmountUgx: res.totalAmountUgx || totalPrice,
+        category: selectedTier === 'vip' ? 'VIP' : 'ORDINARY',
+        quantity,
         buyerName: form.fullName.trim(),
         buyerPhone: form.phone.trim(),
-        network,
+        buyerEmail: form.email.trim(),
+        merchantCode: res.merchantCode || mtnConfig?.merchantCode,
+        merchantName: res.merchantName || mtnConfig?.merchantName,
+        isConfigured: res.isConfigured !== false && mtnConfig?.configured !== false,
       });
     } catch {
-      setHasFailedAttempt(true);
       setErrors({
         inventory: 'Unable to submit your reservation right now. Please check your connection and try again.',
       });
@@ -263,7 +221,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
             Select Your Pool Pass
           </h2>
           <p className="text-slate-400 text-sm mt-2">
-            Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000). Powered by Relworx Uganda Mobile Money.
+            Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000). Official MTN Mobile Money Merchant Payments.
           </p>
 
           <div className="mt-3">
@@ -379,21 +337,6 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
           </div>
         )}
 
-        {/* Global Payment Temporarily Unavailable / Inventory Alert */}
-        {providerUnavailableMsg && (
-          <div
-            role="alert"
-            className="max-w-2xl mb-6 p-4 rounded-xl bg-amber-950/50 border border-amber-500/50 text-amber-100 text-xs flex items-start gap-2.5"
-          >
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-bold text-amber-300 block mb-0.5">
-                Mobile Money Payments Temporarily Unavailable
-              </span>
-              <span>{providerUnavailableMsg}</span>
-            </div>
-          </div>
-        )}
 
         {errors.inventory && (
           <div className="max-w-2xl mb-6 p-4 rounded-xl bg-rose-950/60 border border-rose-500 text-rose-200 text-xs flex items-center gap-2">
@@ -542,10 +485,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 <input
                   type="tel"
                   value={form.phone}
-                  onChange={(e) => {
-                    setForm({ ...form, phone: e.target.value });
-                    rotateIdempotencyKey();
-                  }}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
                   placeholder="0775 198 484 or +256 701 234567"
                   className={`w-full px-4 py-2.5 rounded-lg bg-[#080c14] border text-white text-sm focus:outline-none focus:border-amber-400 transition-colors ${
                     errors.phone ? 'border-rose-500' : 'border-white/15'
@@ -553,79 +493,74 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
                 />
                 {errors.phone && <p className="text-xs text-rose-400 mt-1">{errors.phone}</p>}
                 <p className="text-[11px] text-slate-400 mt-1">
-                  An official Relworx payment prompt will be pushed directly to this handset.
+                  Used for your pass reservation and payment verification matching.
                 </p>
               </div>
 
-              {/* Mobile Money Operator Selection */}
+              {/* MTN Mobile Money Payment Method Card */}
               <div className="pt-2">
                 <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Select Mobile Money Network
+                  Payment Method
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (network !== 'MTN') {
-                        setNetwork('MTN');
-                        rotateIdempotencyKey();
-                      }
-                    }}
-                    className={`p-3 rounded-xl border text-left cursor-pointer transition-colors flex items-center gap-3 ${
-                      network === 'MTN'
-                        ? 'bg-[#121c2e] border-amber-400 text-white'
-                        : 'bg-[#080c14] border-white/10 text-slate-400 hover:border-white/20'
-                    }`}
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-amber-400 text-slate-950 font-black flex items-center justify-center text-xs shrink-0 font-mono">
-                      MTN
-                    </div>
-                    <div>
-                      <span className="block text-xs font-bold text-white">MTN MoMo</span>
-                      <span className="text-[10px] text-slate-400">*165# PIN Prompt</span>
-                    </div>
-                  </button>
+                
+                <div className="p-4 rounded-xl border border-amber-400/50 bg-[#121c2e]/90 text-white relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-amber-400/5 rounded-full blur-2xl pointer-events-none" />
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (network !== 'AIRTEL') {
-                        setNetwork('AIRTEL');
-                        rotateIdempotencyKey();
-                      }
-                    }}
-                    className={`p-3 rounded-xl border text-left cursor-pointer transition-colors flex items-center gap-3 ${
-                      network === 'AIRTEL'
-                        ? 'bg-[#121c2e] border-rose-400 text-white'
-                        : 'bg-[#080c14] border-white/10 text-slate-400 hover:border-white/20'
-                    }`}
-                  >
-                    <div className="w-8 h-8 rounded-lg bg-rose-600 text-white font-black flex items-center justify-center text-xs shrink-0 font-mono">
-                      AIR
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-11 h-11 rounded-xl bg-[#FFCC00] text-black font-black flex flex-col items-center justify-center shrink-0 shadow-md">
+                      <span className="text-[12px] leading-tight font-black tracking-tight">MTN</span>
+                      <span className="text-[9px] font-bold tracking-tighter uppercase">MoMo</span>
                     </div>
-                    <div>
-                      <span className="block text-xs font-bold text-white">Airtel Money</span>
-                      <span className="text-[10px] text-slate-400">*185# PIN Prompt</span>
-                    </div>
-                  </button>
-                </div>
-              </div>
 
-              {/* Inline Provider Temporarily Unavailable / Submission Error directly above Submit CTA */}
-              {providerUnavailableMsg && (
-                <div
-                  role="alert"
-                  className="p-3.5 rounded-xl bg-amber-950/50 border border-amber-500/60 text-amber-100 text-xs flex items-start gap-2.5"
-                >
-                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                  <div className="space-y-1">
-                    <span className="font-bold text-amber-300 block">
-                      Mobile Money Payments Temporarily Unavailable
-                    </span>
-                    <p className="text-amber-100/90 leading-relaxed">{providerUnavailableMsg}</p>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-bold text-white">MTN Mobile Money Merchant Payment</span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                          MoMoPay / USSD
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 mt-1">
+                        Pay securely using MTN MoMo merchant code and enter your transaction ID to verify your pass.
+                      </p>
+
+                      {/* Config Status */}
+                      {mtnConfig && !mtnConfig.configured && (
+                        <div className="mt-2.5 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-semibold block">Merchant Code Not Yet Configured</span>
+                            <span className="text-amber-200/80 text-[11px]">
+                              Set <code className="font-mono bg-black/40 px-1 py-0.5 rounded text-amber-300">MTN_MERCHANT_CODE</code> in your server environment to display the live merchant code.
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {mtnConfig?.configured && (
+                        <div className="mt-2.5 p-2.5 rounded-lg bg-[#080c14]/80 border border-white/10 flex items-center justify-between gap-2">
+                          <div className="text-xs">
+                            <span className="text-slate-400 block text-[10px] uppercase font-mono">Merchant Code</span>
+                            <span className="font-mono font-bold text-amber-300 text-sm tracking-wider">
+                              {mtnConfig.merchantCode}
+                            </span>
+                            {mtnConfig.merchantName && (
+                              <span className="text-slate-400 text-[11px] block">({mtnConfig.merchantName})</span>
+                            )}
+                          </div>
+                          <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-1 rounded">
+                            Dial *165*3#
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3.5 pt-3 border-t border-white/10 text-[11px] text-slate-300 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Your pass is held for 15 minutes while you complete payment and submit your transaction ID.</span>
                   </div>
                 </div>
-              )}
+              </div>
 
               {errors.inventory && (
                 <div
@@ -641,23 +576,20 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
               <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={isSubmitting || isTierSoldOut || retryCooldownSecs > 0}
+                  disabled={isSubmitting || isTierSoldOut}
                   className="w-full py-3.5 text-xs font-bold tracking-wider text-slate-950 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-lg shadow-sm whitespace-nowrap cursor-pointer uppercase flex items-center justify-center gap-2 font-display"
                 >
                   {isSubmitting ? (
                     <div className="flex items-center gap-2">
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Locking Inventory & Initiating...</span>
+                      <span>Locking Pass & Generating Reference...</span>
                     </div>
                   ) : isTierSoldOut ? (
                     <span>{selectedTier.toUpperCase()} Passes Sold Out</span>
-                  ) : retryCooldownSecs > 0 ? (
-                    <span>Payments Unavailable · Retry Available in {retryCooldownSecs}s</span>
                   ) : (
                     <>
                       <span>
-                        {hasFailedAttempt ? 'Retry Payment via' : 'Pay via'} {network} MoMo · UGX{' '}
-                        {totalPrice.toLocaleString()}
+                        Reserve Passes & Pay with MTN MoMo · UGX {totalPrice.toLocaleString()}
                       </span>
                       <ArrowRight className="w-4 h-4" />
                     </>
@@ -666,7 +598,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
                 <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 mt-3">
                   <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span>10-Minute Reservation Lock · Relworx Uganda Mobile Money</span>
+                  <span>15-Minute Reservation Lock · Verified & Issued by Event Admin</span>
                 </div>
               </div>
             </form>
@@ -676,18 +608,23 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
 
       </div>
 
-      {/* Relworx Checkout Modal */}
-      {checkoutModal && (
-        <RelworxPaymentModal
-          orderRef={checkoutModal.orderRef}
-          initialMessage={checkoutModal.message}
-          reservedUntil={checkoutModal.reservedUntil}
-          totalAmountUgx={checkoutModal.totalAmountUgx}
-          buyerName={checkoutModal.buyerName}
-          buyerPhone={checkoutModal.buyerPhone}
-          network={checkoutModal.network}
+      {/* MTN MoMo Merchant Payment & Submission Modal */}
+      {mtnModal && (
+        <MtnMerchantPaymentModal
+          orderRef={mtnModal.orderRef}
+          initialMessage={mtnModal.message}
+          reservedUntil={mtnModal.reservedUntil}
+          totalAmountUgx={mtnModal.totalAmountUgx}
+          buyerName={mtnModal.buyerName}
+          buyerPhone={mtnModal.buyerPhone}
+          buyerEmail={mtnModal.buyerEmail}
+          category={mtnModal.category}
+          quantity={mtnModal.quantity}
+          merchantCode={mtnModal.merchantCode}
+          merchantName={mtnModal.merchantName}
+          isConfigured={mtnModal.isConfigured}
           onClose={() => {
-            setCheckoutModal(null);
+            setMtnModal(null);
             refreshCounts();
           }}
           onPaymentSuccess={() => {

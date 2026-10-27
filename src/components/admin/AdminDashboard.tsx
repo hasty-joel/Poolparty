@@ -18,7 +18,8 @@ import {
   ExternalLink, 
   XCircle, 
   QrCode,
-  Smartphone 
+  Smartphone,
+  AlertCircle
 } from 'lucide-react';
 import { TicketService } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
@@ -47,13 +48,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'VIP' | 'ORDINARY'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'reserved' | 'issued' | 'paid'>('all');
 
-  const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'physical_sale' | 'setup_guide'>('inventory');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'mtn_payments' | 'orders' | 'physical_sale' | 'setup_guide'>('mtn_payments');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmReleaseId, setConfirmReleaseId] = useState<string | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [verifyingOrderRef, setVerifyingOrderRef] = useState<string | null>(null);
   const [healthData, setHealthData] = useState<any>(null);
+
+  // MTN MoMo Merchant Verification State
+  const [mtnStatusFilter, setMtnStatusFilter] = useState<'all' | 'pending_verification' | 'verified' | 'rejected' | 'unsubmitted'>('all');
+  const [mtnSearchTerm, setMtnSearchTerm] = useState('');
+  const [verifyingMtnOrderRef, setVerifyingMtnOrderRef] = useState<string | null>(null);
+  const [rejectModalOrder, setRejectModalOrder] = useState<any | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('Transaction ID could not be confirmed on MTN MoMo merchant statement');
+  const [isRejecting, setIsRejecting] = useState(false);
+  const [copiedTxId, setCopiedTxId] = useState<string | null>(null);
 
   // Physical Sale Form
   const [saleCategory, setSaleCategory] = useState<TicketCategory>('ORDINARY');
@@ -116,6 +126,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setActionError('Error verifying with Relworx: ' + err?.message);
     } finally {
       setVerifyingOrderRef(null);
+    }
+  };
+
+  const handleVerifyMtnOrder = async (orderRef: string) => {
+    setVerifyingMtnOrderRef(orderRef);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const res = await TicketService.verifyMtnPaymentAdmin(orderRef, 'Admin', 'Verified against MTN MoMo Merchant records');
+      if (res.success) {
+        setActionSuccess(`Verified & Issued! Order ${orderRef} marked as PAID. QR ticket passes have been activated.`);
+        await loadData();
+      } else {
+        setActionError(res.message || 'MTN payment verification failed.');
+      }
+    } catch (err: any) {
+      setActionError('Error verifying MTN payment: ' + (err?.message || err));
+    } finally {
+      setVerifyingMtnOrderRef(null);
+    }
+  };
+
+  const handleConfirmRejectMtn = async () => {
+    if (!rejectModalOrder) return;
+    setIsRejecting(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const res = await TicketService.rejectMtnPaymentAdmin(rejectModalOrder.order_ref, rejectReason);
+      if (res.success) {
+        setActionSuccess(`Order ${rejectModalOrder.order_ref} rejected. Reserved tickets were released back to available inventory.`);
+        setRejectModalOrder(null);
+        await loadData();
+      } else {
+        setActionError(res.message || 'Rejection failed.');
+      }
+    } catch (err: any) {
+      setActionError('Error rejecting payment: ' + (err?.message || err));
+    } finally {
+      setIsRejecting(false);
     }
   };
 
@@ -458,14 +508,18 @@ notify pgrst, 'reload schema';`;
 
             <div className="h-3 w-px bg-white/10 hidden sm:block"></div>
 
+            <div className="h-3 w-px bg-white/10 hidden sm:block"></div>
+
             <div className="flex items-center gap-1.5">
-              <Smartphone className="w-4 h-4 text-amber-400" />
+              <span className="w-2.5 h-2.5 rounded-full bg-[#FFCC00] shrink-0" />
               <span>
-                Relworx Gateway:{' '}
-                {healthData?.relworxConfigured ? (
-                  <strong className="text-emerald-400">Live Production Active</strong>
+                MTN MoMoPay:{' '}
+                {healthData?.mtnMerchantConfigured ? (
+                  <strong className="text-amber-300">
+                    Code <code className="font-mono bg-black/40 px-1 py-0.5 rounded text-[#FFCC00]">{healthData?.mtnMerchantCode}</code> Active
+                  </strong>
                 ) : (
-                  <strong className="text-amber-300">Sandbox Simulation Active</strong>
+                  <strong className="text-rose-400">Merchant Code Not Set</strong>
                 )}
               </span>
             </div>
@@ -599,43 +653,465 @@ notify pgrst, 'reload schema';`;
         )}
 
         {/* Tab Controls */}
-        <div className="flex flex-wrap items-center gap-2 border-b border-white/10 pb-2">
-          <button
-            onClick={() => setActiveTab('inventory')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-              activeTab === 'inventory' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            All 70 Inventory Tickets ({tickets.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('orders')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
-              activeTab === 'orders' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <span>Relworx Orders & Sales</span>
-            <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-800 text-amber-300 font-mono">
-              {orders.length}
-            </span>
-          </button>
-          <button
-            onClick={() => setActiveTab('physical_sale')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-              activeTab === 'physical_sale' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Record Physical Staff Sale
-          </button>
-          <button
-            onClick={() => setActiveTab('setup_guide')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
-              activeTab === 'setup_guide' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Supabase & Relworx Setup
-          </button>
-        </div>
+        {(() => {
+          const pendingMtnCount = orders.filter((o) => o.verification_status === 'pending_verification').length;
+          const totalMtnOrders = orders.filter((o) => o.payment_method === 'mtn_momo' || o.network === 'MTN' || o.mtn_transaction_id).length;
+          return (
+            <div className="flex flex-wrap items-center gap-2 border-b border-white/10 pb-2">
+              <button
+                onClick={() => setActiveTab('mtn_payments')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-2 ${
+                  activeTab === 'mtn_payments' ? 'bg-[#FFCC00] text-slate-950 font-black' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>MTN MoMo Desk</span>
+                {pendingMtnCount > 0 ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-black bg-rose-600 text-white animate-pulse">
+                    {pendingMtnCount} Awaiting Review
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-800 text-amber-300 font-mono">
+                    {totalMtnOrders}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab('inventory')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                  activeTab === 'inventory' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                All 70 Inventory Tickets ({tickets.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('orders')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === 'orders' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>All Orders ({orders.length})</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('physical_sale')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                  activeTab === 'physical_sale' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Record Physical Staff Sale
+              </button>
+              <button
+                onClick={() => setActiveTab('setup_guide')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                  activeTab === 'setup_guide' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Setup & SQL Guide
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* TAB: MTN Mobile Money Merchant Payments & Verification */}
+        {activeTab === 'mtn_payments' && (
+          <div className="bg-[#070e1b] border-2 border-amber-400/40 rounded-2xl p-5 sm:p-6 space-y-5 shadow-2xl">
+            {/* Header & Quick stats */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/10 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#FFCC00]" />
+                  <h3 className="text-lg font-black text-white font-display">
+                    MTN Mobile Money Merchant Verification Desk
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Cross-verify customer-submitted MTN Transaction IDs against your MTN MoMo merchant statement before issuing passes.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={loadData}
+                  disabled={loading}
+                  className="px-3.5 py-2 bg-white/5 hover:bg-white/10 border border-white/15 text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-amber-400' : ''}`} />
+                  <span>Refresh List</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Merchant Code Alert Notice */}
+            {healthData && !healthData.mtnMerchantConfigured && (
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-amber-300 block">MTN Merchant Code Not Yet Configured</span>
+                  <p className="text-amber-200/80 mt-0.5">
+                    Add <code className="font-mono bg-black/50 px-1 py-0.5 rounded text-amber-300">MTN_MERCHANT_CODE=XXXXXX</code> in your server environment (.env) to display the live merchant code on customer checkout.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Top Metric Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="p-3.5 rounded-xl bg-[#030712] border border-amber-400/30">
+                <span className="text-[10px] uppercase font-bold text-amber-400 block tracking-wider">
+                  Awaiting Verification
+                </span>
+                <span className="text-2xl font-black text-amber-300 font-mono mt-0.5 block">
+                  {orders.filter((o) => o.verification_status === 'pending_verification').length}
+                </span>
+                <span className="text-[10px] text-slate-500 block">Tx ID submitted by buyer · Pending review</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-[#030712] border border-emerald-500/30">
+                <span className="text-[10px] uppercase font-bold text-emerald-400 block tracking-wider">
+                  Verified & Active Passes
+                </span>
+                <span className="text-2xl font-black text-emerald-300 font-mono mt-0.5 block">
+                  {orders.filter((o) => o.verification_status === 'verified').length}
+                </span>
+                <span className="text-[10px] text-slate-500 block">QR code activated & ready for gate scanner</span>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-[#030712] border border-white/10">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
+                  Configured Merchant Code
+                </span>
+                <span className="text-lg font-black text-white font-mono mt-0.5 block tracking-wider">
+                  {healthData?.mtnMerchantCode || 'Not Set'}
+                </span>
+                <span className="text-[10px] text-slate-500 block">{healthData?.mtnMerchantName || 'Prince Resort Bunamwaya'}</span>
+              </div>
+            </div>
+
+            {/* Filters & Search */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
+              <div className="relative w-full sm:w-80">
+                <input
+                  type="text"
+                  value={mtnSearchTerm}
+                  onChange={(e) => setMtnSearchTerm(e.target.value)}
+                  placeholder="Search Tx ID, order ref, phone, name..."
+                  className="w-full px-4 py-2 pl-9 bg-[#030712] border border-white/15 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 font-mono"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <select
+                  value={mtnStatusFilter}
+                  onChange={(e) => setMtnStatusFilter(e.target.value as any)}
+                  className="px-3 py-2 bg-[#030712] border border-white/15 rounded-xl text-xs text-white focus:outline-none"
+                >
+                  <option value="all">All Verification Statuses</option>
+                  <option value="pending_verification">Pending Verification Only</option>
+                  <option value="verified">Verified & Issued</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="unsubmitted">Awaiting Customer Tx ID</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Orders Table */}
+            {(() => {
+              const mtnOrders = orders.filter((o) => {
+                // Must be MTN MoMo or have verification info
+                const isMtn = o.payment_method === 'mtn_momo' || o.network === 'MTN' || o.mtn_transaction_id || o.verification_status;
+                if (!isMtn) return false;
+
+                const statusMatch =
+                  mtnStatusFilter === 'all'
+                    ? true
+                    : mtnStatusFilter === 'pending_verification'
+                    ? o.verification_status === 'pending_verification'
+                    : mtnStatusFilter === 'verified'
+                    ? o.verification_status === 'verified'
+                    : mtnStatusFilter === 'rejected'
+                    ? o.verification_status === 'rejected'
+                    : o.verification_status === 'unsubmitted' || !o.verification_status;
+
+                const term = mtnSearchTerm.trim().toLowerCase();
+                const searchMatch =
+                  !term ||
+                  (o.mtn_transaction_id && o.mtn_transaction_id.toLowerCase().includes(term)) ||
+                  (o.order_ref && o.order_ref.toLowerCase().includes(term)) ||
+                  (o.payer_phone && o.payer_phone.toLowerCase().includes(term)) ||
+                  (o.buyer_name && o.buyer_name.toLowerCase().includes(term)) ||
+                  (o.buyer_phone && o.buyer_phone.toLowerCase().includes(term));
+
+                return statusMatch && searchMatch;
+              });
+
+              if (mtnOrders.length === 0) {
+                return (
+                  <div className="p-8 text-center text-xs text-slate-400 border border-dashed border-white/10 rounded-xl">
+                    No MTN Mobile Money orders match the current filter.
+                  </div>
+                );
+              }
+
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-white/10 text-slate-400 uppercase text-[10px] tracking-wider">
+                        <th className="py-3 px-3">Order Ref / Time</th>
+                        <th className="py-3 px-3">Attendee</th>
+                        <th className="py-3 px-3">MTN Tx ID & Payer</th>
+                        <th className="py-3 px-3">Pass Tier</th>
+                        <th className="py-3 px-3">Amount (UGX)</th>
+                        <th className="py-3 px-3">Verification</th>
+                        <th className="py-3 px-3 text-right">Admin Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {mtnOrders.map((ord) => {
+                        const isVip = ord.category === 'VIP';
+                        const isPendingReview = ord.verification_status === 'pending_verification';
+                        const isVerified = ord.verification_status === 'verified';
+                        const isRejected = ord.verification_status === 'rejected';
+
+                        return (
+                          <tr key={ord.id || ord.order_ref} className="hover:bg-white/[0.02] transition-colors">
+                            <td className="py-3 px-3 font-mono">
+                              <span className="font-bold text-cyan-300 block">{ord.order_ref}</span>
+                              <span className="text-[10px] text-slate-500">
+                                {new Date(ord.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                              </span>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              <span className="font-bold text-white block">{ord.buyer_name}</span>
+                              <span className="text-[11px] text-slate-400 font-mono block">{ord.buyer_phone}</span>
+                              <span className="text-[10px] text-slate-500">{ord.buyer_email}</span>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              {ord.mtn_transaction_id ? (
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-black text-amber-300 bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded text-[11px]">
+                                      {ord.mtn_transaction_id}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(ord.mtn_transaction_id);
+                                        setCopiedTxId(ord.mtn_transaction_id);
+                                        setTimeout(() => setCopiedTxId(null), 2000);
+                                      }}
+                                      className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                                      title="Copy Transaction ID"
+                                    >
+                                      {copiedTxId === ord.mtn_transaction_id ? (
+                                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                      ) : (
+                                        <Copy className="w-3.5 h-3.5" />
+                                      )}
+                                    </button>
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 font-mono block">
+                                    Payer Phone: <strong className="text-white">{ord.payer_phone || ord.buyer_phone}</strong>
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-500 italic">
+                                  Awaiting buyer submission
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-3">
+                              <span className={`inline-block font-extrabold text-[10px] uppercase px-2 py-0.5 rounded ${
+                                isVip ? 'bg-cyan-950 text-cyan-300 border border-cyan-800' : 'bg-amber-950 text-amber-300 border border-amber-800'
+                              }`}>
+                                {ord.quantity}× {ord.category}
+                              </span>
+                            </td>
+
+                            <td className="py-3 px-3 font-mono font-bold text-white">
+                              UGX {Number(ord.total_amount_ugx).toLocaleString()}
+                            </td>
+
+                            <td className="py-3 px-3">
+                              {isPendingReview ? (
+                                <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2.5 py-1 rounded bg-amber-950 text-amber-300 border border-amber-500 animate-pulse">
+                                  <Clock className="w-3 h-3" />
+                                  <span>Pending Review</span>
+                                </span>
+                              ) : isVerified ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    <span>Verified & Issued</span>
+                                  </span>
+                                  {ord.verified_at && (
+                                    <span className="block text-[9px] text-slate-400 font-mono">
+                                      By {ord.verified_by || 'Admin'} · {new Date(ord.verified_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : isRejected ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 font-bold text-[10px] uppercase px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-700">
+                                    <XCircle className="w-3 h-3" />
+                                    <span>Rejected</span>
+                                  </span>
+                                  {ord.rejection_reason && (
+                                    <span className="block text-[10px] text-rose-400 max-w-[140px] truncate" title={ord.rejection_reason}>
+                                      {ord.rejection_reason}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="inline-block font-medium text-[10px] uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                                  Unsubmitted
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                {isPendingReview && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleVerifyMtnOrder(ord.order_ref)}
+                                      disabled={verifyingMtnOrderRef === ord.order_ref}
+                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-[10px] uppercase rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
+                                      title="Mark paid and activate QR ticket passes"
+                                    >
+                                      {verifyingMtnOrderRef === ord.order_ref ? (
+                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <CheckCircle2 className="w-3 h-3" />
+                                      )}
+                                      <span>Verify & Issue</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRejectModalOrder(ord);
+                                        setRejectReason('Transaction ID could not be confirmed on MTN MoMo merchant statement');
+                                      }}
+                                      className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900 border border-rose-700/50 text-rose-300 text-[10px] font-bold uppercase rounded cursor-pointer"
+                                      title="Reject payment and release tickets back to available stock"
+                                    >
+                                      Reject
+                                    </button>
+                                  </>
+                                )}
+
+                                {isVerified && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const tList = tickets.filter((t) => t.order_ref === ord.order_ref);
+                                        if (tList.length > 0) {
+                                          onViewTicket(tList[0]);
+                                        } else {
+                                          setActiveTab('inventory');
+                                          setActionSuccess('Switched to Inventory tab to view passes.');
+                                        }
+                                      }}
+                                      className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 text-[10px] font-bold rounded cursor-pointer"
+                                    >
+                                      View Pass
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const tList = tickets.filter((t) => t.order_ref === ord.order_ref);
+                                        if (tList.length > 0) {
+                                          await handleReprintPdf(tList[0]);
+                                        } else {
+                                          setActionError('No ticket record found for reprint.');
+                                        }
+                                      }}
+                                      className="px-2 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-300 text-[10px] font-bold rounded flex items-center gap-1 cursor-pointer"
+                                      title="Reprint personalized PDF ticket"
+                                    >
+                                      <Printer className="w-3 h-3" />
+                                      <span>Reprint</span>
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* Rejection Reason Modal */}
+        {rejectModalOrder && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div className="bg-[#0b1220] border-2 border-rose-500/60 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+              <div className="flex items-center gap-2 text-rose-400">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <h4 className="text-base font-bold text-white font-display">
+                  Reject MTN Mobile Money Payment
+                </h4>
+              </div>
+
+              <div className="text-xs text-slate-300 space-y-1">
+                <p>
+                  You are rejecting order <strong className="font-mono text-cyan-300">{rejectModalOrder.order_ref}</strong> for <strong className="text-white">{rejectModalOrder.buyer_name}</strong>.
+                </p>
+                <p className="text-slate-400">
+                  Transaction ID submitted: <strong className="font-mono text-amber-300">{rejectModalOrder.mtn_transaction_id || 'None'}</strong>
+                </p>
+                <p className="text-amber-300 font-semibold pt-1">
+                  The {rejectModalOrder.quantity} reserved {rejectModalOrder.category} pass(es) will be released back to Available Inventory immediately.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Reason for Rejection <span className="text-rose-400">*</span>
+                </label>
+                <textarea
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 bg-[#030712] border border-white/15 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-400"
+                  placeholder="e.g. Transaction ID was not found on our MTN MoMo statement, or amount was incorrect."
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isRejecting}
+                  onClick={() => setRejectModalOrder(null)}
+                  className="px-3 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isRejecting || !rejectReason.trim()}
+                  onClick={handleConfirmRejectMtn}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center gap-1.5 transition-colors"
+                >
+                  {isRejecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
+                  <span>Confirm Reject & Release Stock</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* TAB 1: Inventory Table */}
         {activeTab === 'inventory' && (
@@ -1096,43 +1572,45 @@ notify pgrst, 'reload schema';`;
               {exactUserSql}
             </pre>
 
-            {/* Relworx Webhook and Vercel Setup */}
+            {/* MTN Mobile Money & Relworx Setup */}
             <div className="pt-4 border-t border-white/10 space-y-4">
               <h4 className="text-base font-bold text-white flex items-center gap-2">
-                <Smartphone className="w-4 h-4 text-amber-400" />
-                <span>Relworx Uganda Mobile Money Configuration (MTN & Airtel)</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-[#FFCC00]" />
+                <span>MTN Mobile Money Merchant Payment Configuration</span>
               </h4>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                <div className="p-4 rounded-xl bg-[#030712] border border-white/10 space-y-2">
-                  <span className="font-bold text-amber-300 block">1. Relworx Webhook URL</span>
+                <div className="p-4 rounded-xl bg-[#030712] border border-amber-400/20 space-y-2">
+                  <span className="font-bold text-amber-300 block">1. MTN Merchant Code</span>
                   <p className="text-slate-400 leading-relaxed">
-                    Set this in your Relworx Dashboard under <strong>Business Account &gt; Settings &gt; Webhooks</strong>:
+                    Set your real MTN Merchant Code / MoMoPay ID in your server environment variables. This code is shown to buyers when they dial <strong>*165*3#</strong> to pay.
                   </p>
-                  <code className="block p-2 rounded bg-black/60 font-mono text-[11px] text-cyan-300 break-all select-all">
-                    {window.location.origin}/api/payments/relworx-webhook
+                  <code className="block p-2 rounded bg-black/60 font-mono text-[11px] text-amber-300 select-all">
+                    MTN_MERCHANT_CODE=your_merchant_code
                   </code>
                 </div>
 
-                <div className="p-4 rounded-xl bg-[#030712] border border-white/10 space-y-2">
-                  <span className="font-bold text-cyan-300 block">2. Relworx Signature Verification</span>
+                <div className="p-4 rounded-xl bg-[#030712] border border-cyan-400/20 space-y-2">
+                  <span className="font-bold text-cyan-300 block">2. Admin Passcode</span>
                   <p className="text-slate-400 leading-relaxed">
-                    Copy your Webhook Authentication Key from Relworx Settings and add it to your Vercel / server environment variables as:
+                    Secure the Admin verification dashboard. All payment verifications and ticket release actions require this passcode.
                   </p>
-                  <code className="block p-2 rounded bg-black/60 font-mono text-[11px] text-amber-300">
-                    RELWORX_WEBHOOK_SECRET=your_webhook_key_here
+                  <code className="block p-2 rounded bg-black/60 font-mono text-[11px] text-cyan-300 select-all">
+                    ADMIN_PASSCODE=your_secure_passcode
                   </code>
                 </div>
               </div>
 
               {/* Required Environment Variables Card */}
               <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-2 text-xs">
-                <span className="font-bold text-slate-200 block">3. Required Environment Variables</span>
+                <span className="font-bold text-slate-200 block">3. Required Environment Variables (.env)</span>
                 <pre className="p-3 bg-[#030712] rounded-lg text-emerald-300 font-mono text-[11px] leading-relaxed overflow-x-auto">
-{`# Relworx Payment Gateway (Uganda Mobile Money)
-RELWORX_API_KEY=your_relworx_api_key
-RELWORX_ACCOUNT_NO=your_relworx_account_no
-RELWORX_WEBHOOK_SECRET=your_webhook_secret
+{`# MTN Mobile Money Merchant Payments
+MTN_MERCHANT_CODE=556677
+MTN_MERCHANT_NAME="Prince Resort Bunamwaya"
+
+# Admin Authentication
+ADMIN_PASSCODE=prince2026
 
 # Supabase Database (Project: Poolparty)
 SUPABASE_URL=https://your-project.supabase.co

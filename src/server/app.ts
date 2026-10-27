@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { SupabaseServerService } from './supabaseServer.js';
 import { RelworxService, sanitizeDiagnosticText } from './relworxService.js';
+import { MtnMoMoService } from './mtnMoMoService.js';
 
 dotenv.config();
 
@@ -34,10 +35,10 @@ export function createExpressApp() {
     }
 
     const adminPasscode = getAdminPasscode();
-    if (!token || (token !== adminPasscode && token !== 'admin')) {
+    if (!token || token !== adminPasscode) {
       return res.status(401).json({
         success: false,
-        error: 'Unauthorized: Admin authorization required.',
+        error: 'Unauthorized: Valid Admin passcode required.',
       });
     }
 
@@ -64,6 +65,90 @@ export function createExpressApp() {
       res.json(result);
     } catch {
       res.status(500).json({ success: false, error: 'Server error reading ticket inventory.' });
+    }
+  });
+
+  /**
+   * MTN Mobile Money Merchant Configuration:
+   * Returns configured merchant code, name, and instructions.
+   * If MTN_MERCHANT_CODE is missing, returns clear configuration notice.
+   */
+  app.get('/api/payments/mtn-config', (_req, res) => {
+    try {
+      const config = MtnMoMoService.getPublicConfig();
+      res.json({ success: true, ...config });
+    } catch {
+      res.status(500).json({ success: false, error: 'Could not load MTN configuration' });
+    }
+  });
+
+  /**
+   * MTN Mobile Money Pass Reservation:
+   * 1. Validates inputs & calculates trusted server price (UGX 20,000 Ordinary, UGX 50,000 VIP)
+   * 2. Atomically locks tickets for 15 minutes
+   * 3. Creates pending order and returns merchant payment instructions
+   */
+  app.post('/api/payments/mtn-reserve', async (req, res) => {
+    try {
+      const { category, quantity, buyerName, buyerEmail, buyerPhone } = req.body || {};
+      if (!category || !quantity || !buyerName || !buyerEmail || !buyerPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide all required fields: full name, email, phone number, category, and quantity.',
+          error: 'VALIDATION_ERROR',
+        });
+      }
+
+      const result = await SupabaseServerService.initiateMtnMerchantReservation({
+        category,
+        quantity: Number(quantity),
+        buyerName: String(buyerName).trim(),
+        buyerEmail: String(buyerEmail).trim(),
+        buyerPhone: String(buyerPhone).trim(),
+      });
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: 'Server error while reserving passes.' });
+    }
+  });
+
+  /**
+   * MTN Mobile Money Transaction Submission:
+   * Customer submits their MTN Transaction ID after paying to the merchant code.
+   * Validates format, checks for duplicates, and sets verification_status = 'pending_verification'.
+   * DOES NOT issue tickets or mark as paid!
+   */
+  app.post('/api/payments/mtn-submit', async (req, res) => {
+    try {
+      const { orderRef, mtnTransactionId, payerPhone, notes } = req.body || {};
+      if (!orderRef || !mtnTransactionId || !payerPhone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Order reference, MTN Transaction ID, and payer phone number are required.',
+          error: 'VALIDATION_ERROR',
+        });
+      }
+
+      const result = await SupabaseServerService.submitMtnTransaction({
+        orderRef: String(orderRef).trim(),
+        mtnTransactionId: String(mtnTransactionId).trim(),
+        payerPhone: String(payerPhone).trim(),
+        notes: notes ? String(notes).trim() : undefined,
+      });
+
+      if (!result.success) {
+        const statusCode = result.error === 'DUPLICATE_TRANSACTION_ID' ? 409 : 400;
+        return res.status(statusCode).json(result);
+      }
+
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: 'Server error while submitting payment.' });
     }
   });
 
@@ -324,6 +409,9 @@ export function createExpressApp() {
       ticketsSchemaReady: health.ticketsSchemaReady,
       ordersTableReady: health.ordersTableReady,
       schemaWarning: health.schemaWarning,
+      mtnMerchantConfigured: MtnMoMoService.isConfigured(),
+      mtnMerchantCode: MtnMoMoService.getMerchantCode() ? 'Configured' : 'Missing (MTN_MERCHANT_CODE pending in .env)',
+      mtnMerchantName: MtnMoMoService.getMerchantName(),
       relworxConfigured: RelworxService.isConfigured(),
       relworxStatus: RelworxService.getProviderHealthStatus(),
       relworxAccount: RelworxService.getAccountNo() ? 'Configured' : 'Missing',
@@ -352,6 +440,51 @@ export function createExpressApp() {
       res.json(result);
     } catch {
       res.status(500).json({ success: false, error: 'Error loading orders.' });
+    }
+  });
+
+  /**
+   * Admin: Verify MTN Mobile Money Merchant Payment
+   * Checks against official MTN merchant portal records and activates QR tickets
+   */
+  app.post('/api/admin/verify-mtn-payment', requireAdminAuth, async (req, res) => {
+    try {
+      const { orderRef, adminName, notes } = req.body || {};
+      if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef is required.' });
+
+      const result = await SupabaseServerService.verifyMtnPaymentAdmin({
+        orderRef: String(orderRef).trim(),
+        adminName: typeof adminName === 'string' ? adminName : 'Admin',
+        notes: typeof notes === 'string' ? notes : undefined,
+      });
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+      res.json(result);
+    } catch {
+      res.status(500).json({ success: false, message: 'Error verifying MTN payment.' });
+    }
+  });
+
+  /**
+   * Admin: Reject MTN Mobile Money Merchant Payment
+   * Marks order rejected and releases reserved tickets back to inventory
+   */
+  app.post('/api/admin/reject-mtn-payment', requireAdminAuth, async (req, res) => {
+    try {
+      const { orderRef, reason, adminName } = req.body || {};
+      if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef is required.' });
+
+      const result = await SupabaseServerService.rejectMtnPaymentAdmin({
+        orderRef: String(orderRef).trim(),
+        reason: typeof reason === 'string' ? reason : 'Unmatched transaction ID on MTN merchant account',
+        adminName: typeof adminName === 'string' ? adminName : 'Admin',
+      });
+
+      res.json(result);
+    } catch {
+      res.status(500).json({ success: false, message: 'Error rejecting payment.' });
     }
   });
 
