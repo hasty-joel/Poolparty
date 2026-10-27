@@ -4,6 +4,7 @@ import http from 'node:http';
 import { createExpressApp } from '../src/server/app.js';
 import { SupabaseServerService } from '../src/server/supabaseServer.js';
 import { RelworxService, sanitizeDiagnosticText } from '../src/server/relworxService.js';
+import { MtnMoMoService } from '../src/server/mtnMoMoService.js';
 import { TicketService } from '../src/lib/ticketService.js';
 
 describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
@@ -52,8 +53,9 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       });
       assert.strictEqual(resBadToken.status, 401, 'Must reject incorrect admin passcode');
 
+      const adminPasscode = (process.env.ADMIN_PASSCODE || 'prince2026').trim();
       const resValidToken = await fetch(`${baseUrl}/api/admin/health`, {
-        headers: { Authorization: 'Bearer prince2026' },
+        headers: { Authorization: `Bearer ${adminPasscode}` },
       });
       assert.strictEqual(resValidToken.status, 200, 'Must allow access with valid admin passcode');
       const health = await resValidToken.json();
@@ -757,6 +759,293 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
     assert.strictEqual(sanitized.includes('RELWORX_ACCT_778899'), false, 'Must redact Relworx account number');
     assert.strictEqual(sanitized.includes('775 198 484'), false, 'Must redact buyer phone number');
     assert.strictEqual(sanitized.includes('joel@example.ug'), false, 'Must redact buyer email');
+  });
+
+  it('15. MTN Mobile Money Configuration Endpoint (/api/payments/mtn-config)', async () => {
+    await startServer();
+
+    try {
+      const res = await fetch(`${baseUrl}/api/payments/mtn-config`);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.strictEqual(data.success, true);
+      assert.strictEqual(data.currency, 'UGX');
+      assert.ok(data.instructions);
+      assert.strictEqual(data.instructions.ussdCode, '*165*3#');
+      assert.ok(Array.isArray(data.instructions.steps));
+    } finally {
+      await stopServer();
+    }
+  });
+
+  it('16. MTN MoMo Reservation: Input Validation & Bounds Checking', async () => {
+    await startServer();
+
+    try {
+      // Rejects quantity 0
+      const resZero = await fetch(`${baseUrl}/api/payments/mtn-reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'ORDINARY',
+          quantity: 0,
+          buyerName: 'Joel Hasty',
+          buyerEmail: 'joel@test.ug',
+          buyerPhone: '+256771234567',
+        }),
+      });
+      assert.strictEqual(resZero.status, 400);
+
+      // Rejects invalid category
+      const resCat = await fetch(`${baseUrl}/api/payments/mtn-reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'PLATINUM',
+          quantity: 1,
+          buyerName: 'Joel Hasty',
+          buyerEmail: 'joel@test.ug',
+          buyerPhone: '+256771234567',
+        }),
+      });
+      assert.strictEqual(resCat.status, 400);
+
+      // Rejects missing email
+      const resEmail = await fetch(`${baseUrl}/api/payments/mtn-reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'VIP',
+          quantity: 1,
+          buyerName: 'Joel Hasty',
+          buyerEmail: '',
+          buyerPhone: '+256771234567',
+        }),
+      });
+      assert.strictEqual(resEmail.status, 400);
+    } finally {
+      await stopServer();
+    }
+  });
+
+  it('17. MTN MoMo Reservation: Locks Inventory for 15 Minutes & Calculates Trusted UGX Prices', async () => {
+    await startServer();
+
+    const mockReserve = mock.method(SupabaseServerService, 'initiateMtnMerchantReservation', async (params: any) => {
+      const unitPrice = params.category === 'VIP' ? 50000 : 20000;
+      return {
+        success: true,
+        orderRef: 'PP-MTN-1793000000000-TEST',
+        reservedUntil: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+        totalAmountUgx: unitPrice * params.quantity,
+        category: params.category,
+        quantity: params.quantity,
+        merchantCode: '998877',
+        merchantName: 'Prince Resort Bunamwaya',
+        isConfigured: true,
+        message: 'Pass reserved for 15 minutes. Pay to the MTN Merchant Code and submit your transaction ID.',
+      };
+    });
+
+    try {
+      // 1x VIP = 50,000 UGX
+      const resVip = await fetch(`${baseUrl}/api/payments/mtn-reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'VIP',
+          quantity: 1,
+          buyerName: 'VIP Attendee',
+          buyerEmail: 'vip@test.ug',
+          buyerPhone: '0772123456',
+        }),
+      });
+      assert.strictEqual(resVip.status, 200);
+      const dataVip = await resVip.json();
+      assert.strictEqual(dataVip.success, true);
+      assert.strictEqual(dataVip.totalAmountUgx, 50000, 'VIP price must strictly be 50,000 UGX');
+      assert.strictEqual(dataVip.orderRef, 'PP-MTN-1793000000000-TEST');
+      assert.ok(dataVip.reservedUntil);
+
+      // 2x Ordinary = 40,000 UGX
+      const resOrd = await fetch(`${baseUrl}/api/payments/mtn-reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: 'ORDINARY',
+          quantity: 2,
+          buyerName: 'Ordinary Attendee',
+          buyerEmail: 'ordinary@test.ug',
+          buyerPhone: '0782123456',
+        }),
+      });
+      assert.strictEqual(resOrd.status, 200);
+      const dataOrd = await resOrd.json();
+      assert.strictEqual(dataOrd.totalAmountUgx, 40000, '2x Ordinary passes must be 40,000 UGX');
+    } finally {
+      mockReserve.mock.restore();
+      await stopServer();
+    }
+  });
+
+  it('18. MTN MoMo Submission: Validates Transaction ID and Payer Phone, Never Issues Active Tickets Directly', async () => {
+    await startServer();
+
+    const mockSubmit = mock.method(SupabaseServerService, 'submitMtnTransaction', async (params: any) => {
+      return {
+        success: true,
+        orderRef: params.orderRef,
+        verificationStatus: 'pending_verification' as const,
+        mtnTransactionId: params.mtnTransactionId,
+        message: 'MTN payment submitted successfully! Our event admin will verify against the MTN Merchant portal before tickets are issued.',
+      };
+    });
+
+    try {
+      // Rejects invalid transaction ID format
+      const resShort = await fetch(`${baseUrl}/api/payments/mtn-submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-1793000000000-TEST',
+          mtnTransactionId: '12',
+          payerPhone: '0772123456',
+        }),
+      });
+      assert.strictEqual(resShort.status, 400, 'Must reject transaction IDs shorter than 5 characters');
+
+      // Accepts valid submission
+      const resValid = await fetch(`${baseUrl}/api/payments/mtn-submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-1793000000000-TEST',
+          mtnTransactionId: 'MTN1234567890',
+          payerPhone: '0772123456',
+          notes: 'Paid via MoMoPay menu',
+        }),
+      });
+      assert.strictEqual(resValid.status, 200);
+      const dataValid = await resValid.json();
+      assert.strictEqual(dataValid.success, true);
+      assert.strictEqual(dataValid.verificationStatus, 'pending_verification');
+      assert.strictEqual((dataValid as any).status, undefined, 'Order must not be marked paid upon submission');
+      assert.strictEqual((dataValid as any).tickets, undefined, 'Tickets must never be issued prior to admin verification');
+    } finally {
+      mockSubmit.mock.restore();
+      await stopServer();
+    }
+  });
+
+  it('19. MTN MoMo Idempotency: Duplicate Transaction IDs Across Orders are Strictly Rejected (HTTP 409)', async () => {
+    await startServer();
+
+    const mockSubmit = mock.method(SupabaseServerService, 'submitMtnTransaction', async (params: any) => {
+      if (params.mtnTransactionId === 'DUP999888777') {
+        return {
+          success: false,
+          error: 'DUPLICATE_TRANSACTION_ID',
+          message: 'This MTN Transaction ID has already been submitted for another order. Each payment transaction ID can only be registered once.',
+        };
+      }
+      return {
+        success: true,
+        orderRef: params.orderRef,
+        verificationStatus: 'pending_verification' as const,
+        mtnTransactionId: params.mtnTransactionId,
+        message: 'Submitted',
+      };
+    });
+
+    try {
+      const resDup = await fetch(`${baseUrl}/api/payments/mtn-submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-OTHER-ORDER',
+          mtnTransactionId: 'DUP999888777',
+          payerPhone: '0772123456',
+        }),
+      });
+      assert.strictEqual(resDup.status, 409, 'Must return HTTP 409 Conflict for duplicate transaction ID');
+      const dataDup = await resDup.json();
+      assert.strictEqual(dataDup.error, 'DUPLICATE_TRANSACTION_ID');
+    } finally {
+      mockSubmit.mock.restore();
+      await stopServer();
+    }
+  });
+
+  it('20. Admin Verification & Rejection: Authorization Enforced, Updates Status, and Activates/Releases Passes', async () => {
+    await startServer();
+
+    const adminPasscode = (process.env.ADMIN_PASSCODE || 'prince2026').trim();
+
+    const mockVerify = mock.method(SupabaseServerService, 'verifyMtnPaymentAdmin', async (params: any) => {
+      return {
+        success: true,
+        orderRef: params.orderRef,
+        message: 'MTN payment verified successfully. 1 ticket(s) issued.',
+      };
+    });
+
+    const mockReject = mock.method(SupabaseServerService, 'rejectMtnPaymentAdmin', async (params: any) => {
+      return {
+        success: true,
+        orderRef: params.orderRef,
+        message: 'MTN payment submission rejected and 1 reserved pass(es) released.',
+      };
+    });
+
+    try {
+      // 1. Unauthorized attempts are rejected (HTTP 401)
+      const resUnauth = await fetch(`${baseUrl}/api/admin/verify-mtn-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderRef: 'PP-MTN-1793000000000-TEST' }),
+      });
+      assert.strictEqual(resUnauth.status, 401, 'Admin verification must reject unauthorized requests');
+
+      // 2. Authorized verification succeeds
+      const resAuth = await fetch(`${baseUrl}/api/admin/verify-mtn-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminPasscode}`,
+        },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-1793000000000-TEST',
+          adminName: 'LeadOrganizer',
+          notes: 'Confirmed 50000 UGX in MTN merchant portal',
+        }),
+      });
+      assert.strictEqual(resAuth.status, 200);
+      const dataAuth = await resAuth.json();
+      assert.strictEqual(dataAuth.success, true);
+      assert.strictEqual(mockVerify.mock.callCount(), 1);
+
+      // 3. Authorized rejection succeeds and frees inventory
+      const resReject = await fetch(`${baseUrl}/api/admin/reject-mtn-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminPasscode}`,
+        },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-1793000000000-TEST',
+          reason: 'Transaction ID not found on MTN merchant portal after 24h',
+          adminName: 'LeadOrganizer',
+        }),
+      });
+      assert.strictEqual(resReject.status, 200);
+      const dataReject = await resReject.json();
+      assert.strictEqual(dataReject.success, true);
+      assert.strictEqual(mockReject.mock.callCount(), 1);
+    } finally {
+      mockVerify.mock.restore();
+      mockReject.mock.restore();
+      await stopServer();
+    }
   });
 });
 

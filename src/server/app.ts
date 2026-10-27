@@ -134,9 +134,18 @@ export function createExpressApp() {
         });
       }
 
+      const txCheck = MtnMoMoService.sanitizeTransactionId(String(mtnTransactionId));
+      if (!txCheck.valid) {
+        return res.status(400).json({
+          success: false,
+          message: txCheck.error || 'Invalid MTN Transaction ID.',
+          error: 'INVALID_TRANSACTION_ID',
+        });
+      }
+
       const result = await SupabaseServerService.submitMtnTransaction({
         orderRef: String(orderRef).trim(),
-        mtnTransactionId: String(mtnTransactionId).trim(),
+        mtnTransactionId: txCheck.cleaned,
         payerPhone: String(payerPhone).trim(),
         notes: notes ? String(notes).trim() : undefined,
       });
