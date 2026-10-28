@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   CheckCircle2, 
@@ -16,7 +16,8 @@ import {
   ChevronRight,
   Send,
   AlertTriangle,
-  ExternalLink
+  PhoneCall,
+  ArrowDown
 } from 'lucide-react';
 import { TicketService } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
@@ -36,6 +37,7 @@ interface MtnMerchantPaymentModalProps {
   quantity?: number;
   merchantCode?: string;
   merchantName?: string;
+  ussdCode?: string;
   isConfigured?: boolean;
   onClose: () => void;
   onPaymentSuccess?: () => void;
@@ -53,6 +55,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
   quantity = 1,
   merchantCode: initialMerchantCode,
   merchantName: initialMerchantName,
+  ussdCode: initialUssdCode,
   isConfigured: initialIsConfigured,
   onClose,
   onPaymentSuccess,
@@ -65,14 +68,22 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
   const [renderedCanvasUrl, setRenderedCanvasUrl] = useState<string | null>(null);
   const [renderingCanvas, setRenderingCanvas] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+  
+  // Copy state & fallbacks
   const [copiedRef, setCopiedRef] = useState(false);
   const [copiedMerchantCode, setCopiedMerchantCode] = useState(false);
+  const [copyCodeFailed, setCopyCodeFailed] = useState(false);
+  const [copyRefFailed, setCopyRefFailed] = useState(false);
+
+  // WhatsApp share
   const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
 
-  // Merchant config
+  // Merchant & USSD configuration
   const [merchantCode, setMerchantCode] = useState<string | undefined>(initialMerchantCode);
   const [merchantName, setMerchantName] = useState<string>(initialMerchantName || 'Prince Resort (Pool Party)');
+  const [ussdCode, setUssdCode] = useState<string>(initialUssdCode || '*165*3#');
+  const [ussdDialUrl, setUssdDialUrl] = useState<string>(`tel:${(initialUssdCode || '*165*3#').replace(/#/g, '%23')}`);
   const [isConfigured, setIsConfigured] = useState<boolean>(initialIsConfigured !== false);
   const [configWarning, setConfigWarning] = useState<string | null>(null);
 
@@ -84,17 +95,21 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState<string | null>(null);
 
+  const step2FormRef = useRef<HTMLFormElement | null>(null);
+
   // Load latest MTN config if not provided
   useEffect(() => {
-    if (!merchantCode) {
-      TicketService.getMtnConfig().then((cfg) => {
-        setIsConfigured(cfg.configured);
-        if (cfg.merchantCode) setMerchantCode(cfg.merchantCode);
-        if (cfg.merchantName) setMerchantName(cfg.merchantName);
-        if (cfg.warning) setConfigWarning(cfg.warning);
-      });
-    }
-  }, [merchantCode]);
+    TicketService.getMtnConfig().then((cfg) => {
+      setIsConfigured(cfg.configured);
+      if (cfg.merchantCode) setMerchantCode(cfg.merchantCode);
+      if (cfg.merchantName) setMerchantName(cfg.merchantName);
+      if (cfg.instructions?.ussdCode) {
+        setUssdCode(cfg.instructions.ussdCode);
+        setUssdDialUrl(cfg.instructions.ussdDialUrl || `tel:${cfg.instructions.ussdCode.replace(/#/g, '%23')}`);
+      }
+      if (cfg.warning) setConfigWarning(cfg.warning);
+    });
+  }, []);
 
   // Reservation countdown timer
   useEffect(() => {
@@ -187,20 +202,62 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
       });
   }, [status, issuedTickets, currentTicketIndex]);
 
-  const copyToClipboard = (text: string, type: 'ref' | 'code') => {
-    navigator.clipboard?.writeText(text);
+  const copyToClipboard = async (text: string, type: 'ref' | 'code') => {
+    let successful = false;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        successful = true;
+      }
+    } catch {
+      successful = false;
+    }
+
+    if (!successful && typeof document !== 'undefined') {
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+      } catch {
+        successful = false;
+      }
+    }
+
     if (type === 'ref') {
-      setCopiedRef(true);
-      setTimeout(() => setCopiedRef(false), 2000);
+      setCopiedRef(successful);
+      setCopyRefFailed(!successful);
+      setTimeout(() => {
+        setCopiedRef(false);
+        setCopyRefFailed(false);
+      }, 2500);
     } else {
-      setCopiedMerchantCode(true);
-      setTimeout(() => setCopiedMerchantCode(false), 2000);
+      setCopiedMerchantCode(successful);
+      setCopyCodeFailed(!successful);
+      setTimeout(() => {
+        setCopiedMerchantCode(false);
+        setCopyCodeFailed(false);
+      }, 2500);
+    }
+  };
+
+  const handleScrollToStep2 = () => {
+    if (step2FormRef.current) {
+      step2FormRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const input = document.getElementById('mtn-tx-input');
+      if (input) input.focus();
     }
   };
 
   const handleSubmitTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!orderRef) return;
+    if (!orderRef || submitting) return;
 
     setSubmitError(null);
     const cleanedTx = transactionId.trim().toUpperCase();
@@ -313,7 +370,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
               <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                 <h3 className="text-sm sm:text-base font-bold text-white truncate">MTN Mobile Money</h3>
                 <span className="text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2 py-0.5 rounded-full bg-[#FFCC00]/15 text-[#FFCC00] border border-[#FFCC00]/30 shrink-0">
-                  UGX Merchant
+                  MoMoPay Merchant
                 </span>
               </div>
               <p className="text-[11px] sm:text-xs text-slate-400 truncate">
@@ -334,7 +391,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
         {/* Modal Body */}
         <div className="p-3.5 sm:p-5 sm:p-6 space-y-4 sm:space-y-6 max-h-[calc(94vh-65px)] overflow-y-auto">
 
-          {/* 1. Confirmed & Paid State: Show Canva Tickets */}
+          {/* 1. Confirmed & Paid State: Show Official Tickets */}
           {status === 'paid' && (
             <div className="space-y-6 text-center animate-in zoom-in-95 duration-200">
               <div className="w-14 h-14 bg-emerald-500/20 border border-emerald-500/40 rounded-full flex items-center justify-center mx-auto text-emerald-400 shadow-lg">
@@ -484,7 +541,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                 <div className="min-w-0 max-w-[200px] xs:max-w-none">
                   <span className="text-[10.5px] text-slate-400 uppercase font-semibold block">Order Reference</span>
                   <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="font-mono text-xs sm:text-sm font-bold text-white break-all">{orderRef}</span>
+                    <span className="font-mono text-xs sm:text-sm font-bold text-white break-all select-all">{orderRef}</span>
                     <button
                       type="button"
                       onClick={() => orderRef && copyToClipboard(orderRef, 'ref')}
@@ -493,6 +550,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                     >
                       {copiedRef ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                     </button>
+                    {copiedRef && <span className="text-[10px] text-emerald-400 font-bold">Copied!</span>}
                   </div>
                 </div>
 
@@ -509,7 +567,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                   </span>
                   <div className="inline-flex items-center gap-1 text-amber-400 font-mono font-bold shrink-0">
                     <Clock className="w-3.5 h-3.5" />
-                    <span>{formatTimer(secondsRemaining)}</span>
+                    <span>Hold: {formatTimer(secondsRemaining)}</span>
                   </div>
                 </div>
               </div>
@@ -524,7 +582,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                       {configWarning || 'The event administrator has not yet configured the MTN_MERCHANT_CODE setting in the server environment variables.'}
                     </p>
                     <p className="mt-2 text-slate-400 text-[11px]">
-                      Administrator: Please set <code className="bg-slate-900 px-1.5 py-0.5 rounded text-amber-300 font-mono">MTN_MERCHANT_CODE="YOUR_CODE"</code> in your Vercel / server environment.
+                      Administrator: Please set <code className="bg-slate-900 px-1.5 py-0.5 rounded text-amber-300 font-mono">MTN_MERCHANT_CODE="YOUR_CODE"</code> in your environment.
                     </p>
                   </div>
                 </div>
@@ -533,84 +591,144 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
               {/* Step 1: Merchant Payment Instructions Card */}
               {isConfigured && merchantCode && (
                 <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-[#121E3A] via-[#0E172E] to-[#0A1124] border-2 border-[#FFCC00]/40 shadow-xl space-y-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-bold uppercase tracking-wider text-[#FFCC00] flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-[#FFCC00] animate-pulse" />
                       Step 1: Pay to MTN Merchant Code
                     </span>
-                    <span className="text-[11px] font-mono text-slate-400">MoMoPay: *165*3#</span>
+                    <span className="text-[11px] font-mono font-bold text-slate-300 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-700">
+                      Entry: {ussdCode}
+                    </span>
                   </div>
 
+                  {/* Merchant Code & Amount Cards */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                     {/* Merchant Code Box */}
-                    <div className="bg-slate-950/80 p-3.5 rounded-xl border border-amber-400/30 flex items-center justify-between">
+                    <div className="bg-slate-950/80 p-3.5 rounded-xl border border-amber-400/30 flex flex-col justify-between gap-2.5">
                       <div>
                         <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
                           Merchant Code
                         </span>
-                        <span className="text-xl sm:text-2xl font-black font-mono text-[#FFCC00] tracking-wide">
+                        <span className="text-2xl sm:text-3xl font-black font-mono text-[#FFCC00] tracking-wider select-all">
                           {merchantCode}
                         </span>
-                        <span className="text-[10px] text-slate-400 block mt-0.5 truncate max-w-[160px]">
+                        <span className="text-[10.5px] text-slate-300 block mt-0.5 truncate">
                           {merchantName}
                         </span>
                       </div>
+                      
                       <button
                         type="button"
                         onClick={() => copyToClipboard(merchantCode, 'code')}
-                        className="py-1.5 px-2.5 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                        className="w-full py-2 px-3 rounded-lg bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer border border-amber-400/30"
                       >
                         {copiedMerchantCode ? (
                           <>
                             <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Copied</span>
+                            <span>Copied Merchant Code!</span>
+                          </>
+                        ) : copyCodeFailed ? (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                            <span>Select Code: {merchantCode}</span>
                           </>
                         ) : (
                           <>
                             <Copy className="w-3.5 h-3.5" />
-                            <span>Copy Code</span>
+                            <span>Copy Merchant Code</span>
                           </>
                         )}
                       </button>
                     </div>
 
                     {/* Exact Amount Box */}
-                    <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between">
+                    <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 flex flex-col justify-between gap-2.5">
                       <div>
                         <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-                          Exact Amount to Pay
+                          Exact Amount Due
                         </span>
-                        <span className="text-xl sm:text-2xl font-black font-mono text-white tracking-wide">
+                        <span className="text-2xl sm:text-3xl font-black font-mono text-white tracking-wide">
                           UGX {totalAmountUgx.toLocaleString()}
                         </span>
-                        <span className="text-[10px] text-emerald-400 block mt-0.5">
-                          Trusted Server Rate (Zero Markup)
+                        <span className="text-[10.5px] text-emerald-400 block mt-0.5 font-medium">
+                          Exact Event Price (Zero Markup)
                         </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Payment Reference: <strong className="text-amber-300 font-mono">{orderRef}</strong>
                       </div>
                     </div>
                   </div>
 
-                  {/* USSD Steps */}
-                  <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800/80 text-xs text-slate-300 space-y-1.5">
-                    <div className="font-semibold text-white flex items-center gap-1.5">
-                      <Smartphone className="w-3.5 h-3.5 text-amber-400" />
-                      <span>How to pay using MTN MoMo:</span>
+                  {/* Primary Action Buttons: Open MTN USSD & I've Paid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <a
+                      href={ussdDialUrl}
+                      className="w-full min-h-[46px] py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900] hover:brightness-110 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-98 cursor-pointer text-center"
+                      title="Open phone dialer with MTN USSD code prefilled"
+                    >
+                      <PhoneCall className="w-4 h-4 fill-current shrink-0" />
+                      <span>Open MTN USSD ({ussdCode})</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={handleScrollToStep2}
+                      className="w-full min-h-[46px] py-2.5 px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer text-center"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>I've Paid — Enter Transaction ID</span>
+                    </button>
+                  </div>
+
+                  {/* USSD Prompt Walkthrough */}
+                  <div className="bg-slate-950/70 p-3.5 sm:p-4 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-2">
+                    <div className="font-semibold text-white flex items-center gap-2">
+                      <Smartphone className="w-4 h-4 text-amber-400" />
+                      <span>How to pay on your phone:</span>
                     </div>
-                    <ol className="list-decimal list-inside space-y-1 text-slate-300 text-[11px] pl-1 leading-relaxed">
-                      <li>Dial <strong className="text-amber-300 font-mono">*165*3#</strong> or open the MTN MoMo app.</li>
-                      <li>Enter Merchant Code: <strong className="text-[#FFCC00] font-mono">{merchantCode}</strong>.</li>
-                      <li>Enter Amount: <strong className="text-white font-mono">UGX {totalAmountUgx.toLocaleString()}</strong>.</li>
-                      <li>Enter Reference: <strong className="text-white font-mono">{orderRef}</strong>.</li>
-                      <li>Enter your MTN MoMo PIN to complete the transfer.</li>
-                      <li>Keep the confirmation SMS and copy the <strong className="text-amber-300">Transaction ID</strong>.</li>
+                    
+                    <ol className="list-decimal list-inside space-y-1.5 text-slate-300 text-[11.5px] pl-1 leading-relaxed">
+                      <li>
+                        Tap <strong className="text-amber-300">Open MTN USSD</strong> above (or dial <strong className="text-[#FFCC00] font-mono">{ussdCode}</strong> in your phone dialer).
+                      </li>
+                      <li>
+                        Select the merchant-payment option (<strong>MoMoPay</strong>) on the MTN menu.
+                      </li>
+                      <li>
+                        When prompted for Merchant Code, enter or paste: <strong className="text-[#FFCC00] font-mono">{merchantCode}</strong> (tap "Copy Merchant Code" above).
+                      </li>
+                      <li>
+                        Enter the exact Amount: <strong className="text-white font-mono">UGX {totalAmountUgx.toLocaleString()}</strong>.
+                      </li>
+                      <li>
+                        When prompted for Reference / Reason, enter: <strong className="text-amber-300 font-mono">{orderRef}</strong>.
+                      </li>
+                      <li>
+                        Enter your secret <strong className="text-white">MTN Mobile Money PIN</strong> on your device to authorize the payment.
+                      </li>
+                      <li>
+                        Keep the confirmation SMS from MTN and copy the <strong className="text-amber-300">Transaction ID</strong>.
+                      </li>
                     </ol>
+
+                    <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10.5px] text-amber-200/90 flex items-start gap-2 mt-2">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                      <p>
+                        <strong>Phone Handset Requirement:</strong> Browser security does not allow websites to control the USSD session or type inside USSD prompts. You must complete and authorize the transfer using your PIN on your phone handset.
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
 
               {/* Step 2: Submission Form (If unsubmitted) */}
               {verificationStatus === 'unsubmitted' && (
-                <form onSubmit={handleSubmitTransaction} className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4">
+                <form
+                  ref={step2FormRef}
+                  onSubmit={handleSubmitTransaction}
+                  className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-4 shadow-xl"
+                >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400" />
@@ -619,8 +737,8 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                     <span className="text-[11px] text-slate-400">From MTN SMS</span>
                   </div>
 
-                  <p className="text-xs text-slate-400">
-                    After completing payment on your handset, enter the official MTN Transaction ID below. Our administrator will verify the record before issuing your QR pass.
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    After completing payment on your handset, enter the official MTN Transaction ID below. The organizer team will verify your transaction against the merchant ledger and activate your official QR ticket pass.
                   </p>
 
                   {submitError && (
@@ -632,10 +750,11 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      <label htmlFor="mtn-tx-input" className="text-[11px] font-semibold text-slate-300 block mb-1">
                         MTN Transaction ID <span className="text-rose-400">*</span>
                       </label>
                       <input
+                        id="mtn-tx-input"
                         type="text"
                         value={transactionId}
                         onChange={(e) => setTransactionId(e.target.value.toUpperCase())}

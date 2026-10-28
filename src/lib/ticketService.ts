@@ -425,6 +425,7 @@ export const TicketService = {
     warning?: string;
     instructions: {
       ussdCode: string;
+      ussdDialUrl?: string;
       steps: string[];
     };
   }> {
@@ -439,6 +440,7 @@ export const TicketService = {
       warning: 'Could not connect to payment server to retrieve MTN configuration.',
       instructions: {
         ussdCode: '*165*3#',
+        ussdDialUrl: 'tel:*165*3%23',
         steps: ['MTN payment configuration is loading...'],
       },
     };

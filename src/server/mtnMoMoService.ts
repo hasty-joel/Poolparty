@@ -21,6 +21,7 @@ export interface MtnMerchantConfig {
   currency: 'UGX';
   instructions: {
     ussdCode: string;
+    ussdDialUrl: string;
     steps: string[];
   };
   warning?: string;
@@ -53,6 +54,26 @@ export const MtnMoMoService = {
     return 'Prince Resort (Pool Party 2026)';
   },
 
+  /**
+   * Configurable MTN USSD entry point (defaults to *165*3#)
+   */
+  getUssdCode(): string {
+    const raw = process.env.MTN_USSD_CODE;
+    if (raw && raw.trim().length > 0 && raw.trim() !== 'undefined') {
+      return raw.trim().replace(/^["']|["']$/g, '');
+    }
+    return '*165*3#';
+  },
+
+  /**
+   * Safe tel: URL with # encoded as %23 for mobile phone dialers
+   */
+  getUssdDialUrl(): string {
+    const code = this.getUssdCode();
+    const encoded = code.replace(/#/g, '%23');
+    return `tel:${encoded}`;
+  },
+
   isConfigured(): boolean {
     const code = this.getMerchantCode();
     return Boolean(code && code.length >= 3);
@@ -64,6 +85,8 @@ export const MtnMoMoService = {
   getPublicConfig(): MtnMerchantConfig {
     const code = this.getMerchantCode();
     const name = this.getMerchantName();
+    const ussdCode = this.getUssdCode();
+    const ussdDialUrl = this.getUssdDialUrl();
 
     if (!code) {
       return {
@@ -72,7 +95,8 @@ export const MtnMoMoService = {
         warning:
           'MTN Merchant Code is currently pending setup in environment variables (MTN_MERCHANT_CODE). Please contact event organizers.',
         instructions: {
-          ussdCode: '*165*3#',
+          ussdCode,
+          ussdDialUrl,
           steps: [
             'Merchant Code is currently pending configuration.',
             'Please contact the event administrator or check back shortly.',
@@ -87,13 +111,14 @@ export const MtnMoMoService = {
       merchantName: name,
       currency: 'UGX',
       instructions: {
-        ussdCode: '*165*3#',
+        ussdCode,
+        ussdDialUrl,
         steps: [
-          'On your MTN phone, dial *165*3# (MoMoPay / Merchant Payment) or open the MTN MoMo app.',
+          `On your MTN phone, dial ${ussdCode} (MoMoPay / Merchant Payment) or open the MTN MoMo app.`,
           `Enter Merchant Code: ${code}`,
           'Enter the exact ticket amount in UGX.',
           'Enter the Order Reference as payment reference / reason.',
-          'Enter your MTN Mobile Money PIN to authorize the payment.',
+          'Enter your MTN Mobile Money PIN to authorize the payment on your device.',
           'Check your MTN SMS confirmation message and copy the MTN Transaction ID.',
           'Enter the Transaction ID below and submit for admin verification.',
         ],

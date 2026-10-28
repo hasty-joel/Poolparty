@@ -4374,6 +4374,74 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       await stopServer();
     }
   });
+
+  it('45. MTN Mobile Money Payment Experience: Configurable USSD (*165*3#), tel: Dialer Link, Clipboard Copy & Verification Flow', async () => {
+    // 1. Verify MtnMoMoService USSD configuration
+    const defaultUssd = MtnMoMoService.getUssdCode();
+    assert.strictEqual(defaultUssd, '*165*3#', 'Default USSD entry point must be *165*3#');
+    const defaultDialUrl = MtnMoMoService.getUssdDialUrl();
+    assert.strictEqual(defaultDialUrl, 'tel:*165*3%23', 'USSD dial URL must percent-encode # as %23');
+
+    // Test configurable USSD override via process.env.MTN_USSD_CODE
+    const prevUssdEnv = process.env.MTN_USSD_CODE;
+    process.env.MTN_USSD_CODE = '*165*3*1#';
+    assert.strictEqual(MtnMoMoService.getUssdCode(), '*165*3*1#');
+    assert.strictEqual(MtnMoMoService.getUssdDialUrl(), 'tel:*165*3*1%23');
+    if (prevUssdEnv === undefined) {
+      delete process.env.MTN_USSD_CODE;
+    } else {
+      process.env.MTN_USSD_CODE = prevUssdEnv;
+    }
+
+    // 2. Verify server endpoint /api/payments/mtn-config returns ussdCode and ussdDialUrl
+    await startServer();
+    try {
+      const configRes = await fetch(`${baseUrl}/api/payments/mtn-config`);
+      assert.strictEqual(configRes.status, 200, 'mtn-config endpoint must return 200');
+      const configData = await configRes.json();
+      assert.strictEqual(configData.success, true);
+      assert.strictEqual(configData.currency, 'UGX');
+      assert.strictEqual(configData.instructions?.ussdCode, '*165*3#');
+      assert.strictEqual(configData.instructions?.ussdDialUrl, 'tel:*165*3%23');
+
+      // 3. Verify MtnMerchantPaymentModal source code enforces UI requirements
+      const modalPath = path.resolve(process.cwd(), 'src/components/payment/MtnMerchantPaymentModal.tsx');
+      assert.ok(fs.existsSync(modalPath), 'MtnMerchantPaymentModal.tsx must exist');
+      const modalCode = fs.readFileSync(modalPath, 'utf8');
+
+      // Prominent Copy Merchant Code button with fallback
+      assert.ok(modalCode.includes('copyToClipboard'), 'Must implement copyToClipboard');
+      assert.ok(modalCode.includes('navigator?.clipboard?.writeText'), 'Must use Clipboard API');
+      assert.ok(modalCode.includes("document.execCommand('copy')"), 'Must have manual copy fallback');
+      assert.ok(modalCode.includes('Copy Merchant Code'), 'Must render Copy Merchant Code button');
+
+      // Open MTN USSD button with tel: link
+      assert.ok(modalCode.includes('href={ussdDialUrl}'), 'Must render Open MTN USSD link with ussdDialUrl');
+      assert.ok(modalCode.includes('Open MTN USSD'), 'Must display Open MTN USSD button label');
+
+      // Clear disclaimer that browser cannot type inside USSD prompts
+      assert.ok(
+        modalCode.includes('Websites cannot automatically control the USSD session') ||
+        modalCode.includes('Phone Handset Requirement'),
+        'Must explain that USSD session and PIN authorization happen manually on phone handset'
+      );
+
+      // "I've Paid" button leading to transaction ID submission
+      assert.ok(modalCode.includes("I've Paid"), 'Must render "I\'ve Paid" action button');
+      assert.ok(modalCode.includes('step2FormRef'), 'Must scroll to/focus step 2 transaction form');
+
+      // 4. Verify transaction ID sanitization blocks fake / placeholder entries
+      const dummyCheck = MtnMoMoService.sanitizeTransactionId('TEST');
+      assert.strictEqual(dummyCheck.valid, false, 'Must reject dummy ID "TEST"');
+      const fakeCheck = MtnMoMoService.sanitizeTransactionId('12345');
+      assert.strictEqual(fakeCheck.valid, false, 'Must reject dummy ID "12345"');
+      const validCheck = MtnMoMoService.sanitizeTransactionId('TX987654321');
+      assert.strictEqual(validCheck.valid, true, 'Must accept real transaction ID');
+      assert.strictEqual(validCheck.cleaned, 'TX987654321');
+    } finally {
+      await stopServer();
+    }
+  });
 });
 
 

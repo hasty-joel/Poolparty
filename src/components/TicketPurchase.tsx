@@ -53,6 +53,11 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
     merchantCode?: string;
     merchantName?: string;
     warning?: string;
+    instructions?: {
+      ussdCode: string;
+      ussdDialUrl?: string;
+      steps: string[];
+    };
   } | null>(null);
 
   // MTN MoMo Merchant Checkout Modal State
@@ -772,6 +777,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
           quantity={mtnModal.quantity}
           merchantCode={mtnModal.merchantCode}
           merchantName={mtnModal.merchantName}
+          ussdCode={mtnConfig?.instructions?.ussdCode}
           isConfigured={mtnModal.isConfigured}
           onClose={() => {
             setMtnModal(null);
