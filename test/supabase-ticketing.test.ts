@@ -3848,7 +3848,288 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       await stopServer();
     }
   });
+
+  it('40. Phase 2 Static Security Analysis: Exact 370-Ticket Pre/Post Invariants, Whitelist Policy Audit & Least-Privilege Grants (Static Checks)', () => {
+    const phase2MigrationPath = path.resolve(
+      process.cwd(),
+      'supabase/migrations/20261029_phase2_database_security_hardening.sql'
+    );
+    assert.ok(fs.existsSync(phase2MigrationPath), 'Phase 2 migration file must exist');
+    const sql = fs.readFileSync(phase2MigrationPath, 'utf8');
+
+    // 1. Non-destructive guarantees (Static Check)
+    assert.strictEqual(/drop\s+table/i.test(sql), false, 'Phase 2 migration must NEVER drop tables');
+    assert.strictEqual(/truncate\s+/i.test(sql), false, 'Phase 2 migration must NEVER truncate tables');
+    assert.strictEqual(/delete\s+from\s+public\.tickets/i.test(sql), false, 'Phase 2 migration must NEVER delete existing tickets');
+
+    // 2. Exact 370-Ticket Pre-Migration Invariant Assertions (Static Check)
+    // 20 online VIP: VIP-001..VIP-020 @ 50k, online, non-null QR
+    assert.ok(/generate_series\(1,\s*20\)/i.test(sql), 'Must validate exact online series VIP-001..VIP-020');
+    // 50 online ORD: ORD-001..ORD-050 @ 20k, online, non-null QR
+    assert.ok(/generate_series\(1,\s*50\)/i.test(sql), 'Must validate exact online series ORD-001..ORD-050');
+    // 100 hardcopy VIP: VIP-021..VIP-120 @ 50k, hardcopy, non-null QR
+    assert.ok(/generate_series\(21,\s*120\)/i.test(sql), 'Must validate exact hardcopy series VIP-021..VIP-120');
+    // 200 hardcopy ORD: ORD-051..ORD-250 @ 20k, hardcopy, non-null QR
+    assert.ok(/generate_series\(51,\s*250\)/i.test(sql), 'Must validate exact hardcopy series ORD-051..ORD-250');
+    assert.ok(/qr_token\s+is\s+null/i.test(sql), 'Must verify zero null qr_tokens across all tickets');
+
+    // 3. Strict Policy Whitelist Enumeration & Abort on Unexpected Policies (Static Check)
+    assert.ok(/from\s+pg_policies/i.test(sql), 'Must query pg_policies for active policies');
+    assert.ok(/v_known_policies/i.test(sql), 'Must maintain a whitelist of known reviewed policy names');
+    assert.ok(/unreviewed unexpected policy/i.test(sql), 'Must raise exception on any unexpected policy');
+
+    // 4. Table Access, Sequences & RLS Hardening (Static Check)
+    assert.ok(/alter\s+table\s+public\.tickets\s+enable\s+row\s+level\s+security/i.test(sql));
+    assert.ok(/alter\s+table\s+public\.orders\s+enable\s+row\s+level\s+security/i.test(sql));
+    assert.ok(/alter\s+table\s+public\.tickets\s+no\s+force\s+row\s+level\s+security/i.test(sql));
+    assert.ok(/alter\s+table\s+public\.orders\s+no\s+force\s+row\s+level\s+security/i.test(sql));
+    assert.ok(/alter\s+table\s+public\.hardcopy_audit_logs\s+no\s+force\s+row\s+level\s+security/i.test(sql));
+
+    // Revoke broad grants from public, anon, authenticated on tables and sequences
+    assert.ok(
+      /revoke\s+all\s+on\s+table\s+public\.tickets\s+from\s+public,\s*anon,\s*authenticated/i.test(sql),
+      'Must revoke public/anon/authenticated on tickets'
+    );
+    assert.ok(
+      /revoke\s+all\s+on\s+table\s+public\.orders\s+from\s+public,\s*anon,\s*authenticated/i.test(sql),
+      'Must revoke public/anon/authenticated on orders'
+    );
+    assert.ok(
+      /revoke\s+all\s+on\s+table\s+public\.hardcopy_audit_logs\s+from\s+public,\s*anon,\s*authenticated/i.test(sql),
+      'Must revoke public/anon/authenticated on hardcopy_audit_logs'
+    );
+    assert.ok(
+      /revoke\s+all\s+on\s+sequence\s+public/i.test(sql),
+      'Must revoke public/anon/authenticated on sequences'
+    );
+
+    // Drop legacy permissive policies
+    const droppedPolicies = [
+      'Authenticated access only',
+      'Authenticated and service role tickets access',
+      'Service role tickets management',
+      'Public ticket read',
+      'Authenticated and service role orders access',
+      'Service role orders management',
+    ];
+    for (const p of droppedPolicies) {
+      assert.ok(
+        new RegExp(`drop\\s+policy\\s+if\\s+exists\\s+"${p}"`, 'i').test(sql),
+        `Must drop legacy policy: ${p}`
+      );
+    }
+
+    // Ensure new policies never grant arbitrary authenticated role
+    assert.strictEqual(
+      /auth\.role\(\)\s*=\s*'authenticated'/i.test(sql),
+      false,
+      'Must NEVER grant arbitrary authenticated role in Phase 2 policies'
+    );
+
+    // 5. Legacy RPC Security: mark_order_paid_atomic, submit_mtn_payment, verify_mtn_payment_admin (Static Check)
+    const legacyRpcs = [
+      'mark_order_paid_atomic',
+      'submit_mtn_payment',
+      'verify_mtn_payment_admin',
+    ];
+    for (const fn of legacyRpcs) {
+      assert.ok(
+        new RegExp(`create\\s+or\\s+replace\\s+function\\s+public\\.${fn}`, 'i').test(sql),
+        `Must redefine ${fn}`
+      );
+      assert.ok(
+        new RegExp(`revoke\\s+all\\s+on\\s+function\\s+public\\.${fn}\\s*\\([\\s\\S]*?\\)\\s*from\\s+public,\\s*anon,\\s*authenticated`, 'i').test(sql),
+        `Must revoke EXECUTE on ${fn}`
+      );
+      assert.ok(
+        new RegExp(`grant\\s+execute\\s+on\\s+function\\s+public\\.${fn}\\s*\\([\\s\\S]*?\\)\\s*to\\s+service_role`, 'i').test(sql),
+        `Must grant EXECUTE on ${fn} to service_role`
+      );
+    }
+
+    // 6. Hardcopy RPC error classification: distinguishes privilege, constraint, audit failure, and mismatch without leaking internal SQL details (Static Check)
+    assert.ok(/when\s+insufficient_privilege\s+then/i.test(sql), 'Must handle insufficient_privilege');
+    assert.ok(/when\s+check_violation\s+then/i.test(sql), 'Must handle check_violation');
+    assert.ok(/INSUFFICIENT_PRIVILEGE/i.test(sql), 'Must return INSUFFICIENT_PRIVILEGE error code');
+    assert.ok(/AUDIT_LOG_FAILED/i.test(sql), 'Must return AUDIT_LOG_FAILED error code');
+    assert.ok(/CHECK_VIOLATION/i.test(sql), 'Must return CHECK_VIOLATION error code');
+    assert.ok(/raise\s+warning/i.test(sql), 'Must log internal details to postgres log rather than leaking to client response');
+
+    // 7. Channel isolation in legacy payment RPCs: strictly updates online tickets (Static Check)
+    assert.ok(
+      /where\s+order_ref\s*=\s*p_order_ref\s+and\s+coalesce\(ticket_channel,\s*'online'\)\s*=\s*'online'/i.test(sql),
+      'mark_order_paid_atomic and verify_mtn_payment_admin must protect hardcopy tickets'
+    );
+  });
+
+  it('41. Phase 2 Simulated Integration: Backend Admin Authorization Verification, Audit Failure Rollback & Channel Isolation (Simulated Integration)', async () => {
+    await startServer();
+    const prevEnv = {
+      SUPABASE_URL: process.env.SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      ADMIN_PASSCODE: process.env.ADMIN_PASSCODE,
+      GATE_PASSCODE: process.env.GATE_PASSCODE,
+    };
+    process.env.SUPABASE_URL = 'https://poolpartytest.supabase.co';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service_role_test_secret_token_abcdefghijklmnopqrstuvwxyz';
+    process.env.ADMIN_PASSCODE = 'organizer_admin_master_2026';
+    process.env.GATE_PASSCODE = 'gate_staff_passcode_2026';
+    GateSecurity.resetStateForTests();
+
+    const adminHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer organizer_admin_master_2026',
+    };
+
+    let simulateAuditFailure = false;
+    let simulatePrivilegeFailure = false;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input?.url || '');
+
+      // Simulate Phase 2 RPC response for activate_hardcopy_tickets_atomic
+      if (url.startsWith('https://poolpartytest.supabase.co/rest/v1/rpc/activate_hardcopy_tickets_atomic')) {
+        if (simulateAuditFailure) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: 'AUDIT_LOG_FAILED',
+              message: 'Atomic hardcopy activation failed: audit record creation failed. Rolled back with zero tickets modified.',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        if (simulatePrivilegeFailure) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: 'INSUFFICIENT_PRIVILEGE',
+              message: 'Database permission denied during atomic hardcopy activation. No tickets were modified.',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+
+      // Simulate mark_order_paid_atomic
+      if (url.startsWith('https://poolpartytest.supabase.co/rest/v1/rpc/mark_order_paid_atomic')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        if (body.p_order_ref === 'PP-RWX-EXISTING-PAID') {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              message: 'Order is already marked as paid',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (body.p_order_ref === 'PP-RWX-NONEXISTENT') {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: 'Order not found',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            order_ref: body.p_order_ref,
+            tickets_issued: 2,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      // 1. Backend Authorization Check: p_admin_name or performedBy CANNOT bypass authentication
+      // Passing adminName in body with no auth header returns 401 Unauthorized
+      const unauthVerify = await fetch(`${baseUrl}/api/admin/mtn-verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-1234',
+          adminName: 'SuperAdminSpoof',
+        }),
+      });
+      assert.strictEqual(unauthVerify.status, 401, 'Must reject unauthenticated payment verification attempt');
+
+      // Passing gate staff session returns 403 Forbidden
+      const gateStaffSession = GateSecurity.issueSession('gate_staff', 3600);
+      const gateStaffVerify = await fetch(`${baseUrl}/api/admin/mtn-verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${gateStaffSession.sessionToken}`,
+        },
+        body: JSON.stringify({
+          orderRef: 'PP-MTN-1234',
+          adminName: 'SuperAdminSpoof',
+        }),
+      });
+      assert.strictEqual(gateStaffVerify.status, 403, 'Must forbid gate staff from verifying payments');
+
+      // 2. Audit log failure returns classified AUDIT_LOG_FAILED (not masked as ATOMIC_UPDATE_MISMATCH)
+      simulateAuditFailure = true;
+      const resAuditFail = await fetch(`${baseUrl}/api/admin/hardcopy/activate`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          ticketNumber: 'ORD-065',
+          sellerName: 'Agent Kato',
+          adminName: 'JoelAdmin',
+        }),
+      });
+      simulateAuditFailure = false;
+      const auditFailBody = await resAuditFail.json();
+      assert.strictEqual(auditFailBody.success, false);
+      assert.strictEqual(auditFailBody.error, 'AUDIT_LOG_FAILED');
+      assert.ok(auditFailBody.message.includes('audit record creation failed'));
+
+      // 3. Permission denied returns classified INSUFFICIENT_PRIVILEGE
+      simulatePrivilegeFailure = true;
+      const resPrivFail = await fetch(`${baseUrl}/api/admin/hardcopy/activate`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          ticketNumber: 'ORD-066',
+          sellerName: 'Agent Kato',
+          adminName: 'JoelAdmin',
+        }),
+      });
+      simulatePrivilegeFailure = false;
+      const privFailBody = await resPrivFail.json();
+      assert.strictEqual(privFailBody.success, false);
+      assert.strictEqual(privFailBody.error, 'INSUFFICIENT_PRIVILEGE');
+
+      // 4. Mark order paid atomic handles non-existent and already-paid orders correctly
+      const nonexistentPaid = await SupabaseServerService.markOrderAsPaid('PP-RWX-NONEXISTENT', {
+        id: 'flw_test_1',
+      });
+      assert.strictEqual(nonexistentPaid, false);
+
+      const alreadyPaid = await SupabaseServerService.markOrderAsPaid('PP-RWX-EXISTING-PAID', {
+        id: 'flw_test_2',
+      });
+      assert.strictEqual(alreadyPaid, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      GateSecurity.resetStateForTests();
+      for (const [k, v] of Object.entries(prevEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      await stopServer();
+    }
+  });
 });
+
 
 
 
