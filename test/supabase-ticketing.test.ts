@@ -4279,7 +4279,103 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       await stopServer();
     }
   });
+
+  it('44. QR Gate Scanner: Camera Constraints, Secure Context Check, QR Token Extraction & Verification Integration', async () => {
+    // 1. Verify GateScanner source code enforces secure context check & explicit Start Scanner permission trigger
+    const scannerPath = path.resolve(process.cwd(), 'src/components/scanner/GateScanner.tsx');
+    assert.ok(fs.existsSync(scannerPath), 'GateScanner.tsx must exist');
+    const scannerCode = fs.readFileSync(scannerPath, 'utf8');
+
+    // Secure context requirement
+    assert.ok(
+      scannerCode.includes('window.isSecureContext') || scannerCode.includes('isSecureContextEnv'),
+      'GateScanner must check window.isSecureContext'
+    );
+    assert.ok(
+      scannerCode.includes('Insecure Context Detected') || scannerCode.includes('Camera access requires a secure connection'),
+      'GateScanner must warn when running in an insecure HTTP context'
+    );
+
+    // getUserMedia with environment facing mode and fallback
+    assert.ok(
+      scannerCode.includes('navigator.mediaDevices.getUserMedia'),
+      'GateScanner must invoke navigator.mediaDevices.getUserMedia'
+    );
+    assert.ok(
+      scannerCode.includes("facingMode: { ideal: targetFacing }") || scannerCode.includes("facingMode: { ideal: facingMode }"),
+      'GateScanner must prefer environment (rear) camera'
+    );
+    assert.ok(
+      scannerCode.includes('OverconstrainedError') || scannerCode.includes('video: true'),
+      'GateScanner must handle camera constraint fallbacks'
+    );
+
+    // Track cleanup on unmount or scanner stop
+    assert.ok(
+      scannerCode.includes('track.stop()'),
+      'GateScanner must stop all MediaStream tracks'
+    );
+    assert.ok(
+      scannerCode.includes('playsinline'),
+      'GateScanner must set playsinline on the video element for mobile compatibility'
+    );
+
+    // QR decoding engines
+    assert.ok(
+      scannerCode.includes('jsQR(') || scannerCode.includes('BarcodeDetector'),
+      'GateScanner must integrate jsQR or BarcodeDetector decoding engine'
+    );
+
+    // Debounce / deduplication to prevent duplicate scans
+    assert.ok(
+      scannerCode.includes('lastScannedCodeRef') || scannerCode.includes('lastScannedRef'),
+      'GateScanner must debounce recent QR scans to prevent duplicate requests'
+    );
+    assert.ok(
+      scannerCode.includes('isVerifyingRef'),
+      'GateScanner must lock scanner while verification request is in flight'
+    );
+
+    // 2. Test gate check-in API flow with signed session token
+    await startServer();
+    try {
+      const prevGatePasscode = process.env.GATE_PASSCODE;
+      process.env.GATE_PASSCODE = 'gatekeeper_passcode_2026';
+      GateSecurity.resetStateForTests();
+
+      // Acquire gate staff session
+      const loginRes = await fetch(`${baseUrl}/api/gate/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: 'gatekeeper_passcode_2026' }),
+      });
+      assert.strictEqual(loginRes.status, 200, 'Gate staff login must succeed');
+      const loginData = await loginRes.json();
+      assert.strictEqual(loginData.authenticated, true);
+      const sessionToken = loginData.sessionToken;
+      assert.ok(sessionToken, 'Must receive signed gate session token');
+
+      // Verify check-in route with invalid token (should gracefully return 200/400 with INVALID status)
+      const verifyRes = await fetch(`${baseUrl}/api/tickets/verify-checkin`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${sessionToken}`,
+        },
+        body: JSON.stringify({ tokenOrNumber: 'not-a-real-ticket' }),
+      });
+      assert.strictEqual(verifyRes.status, 200);
+      const verifyData = await verifyRes.json();
+      assert.strictEqual(verifyData.status, 'INVALID');
+
+      // Clean up gate passcode
+      process.env.GATE_PASSCODE = prevGatePasscode;
+    } finally {
+      await stopServer();
+    }
+  });
 });
+
 
 
 
