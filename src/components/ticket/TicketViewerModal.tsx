@@ -89,20 +89,81 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
     const message = `Pool Party 2026 Ticket 🎉\n\nPass: #${ticket.ticket_number} (${ticket.category} Pass)\nGuest: ${ticket.buyer_name || 'Guest'}\nVerify Ticket: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026\nTime: 12:00 PM Till Late`;
 
     try {
-      const res = await WhatsAppService.shareTicketWithAutoPng({
-        ticket,
-        message,
-        phone: ticket.buyer_phone || '',
-      });
+      // 1. Trigger the image generation utility to render high-res ticket canvas
+      const canvas = await TicketRenderer.renderTicketToCanvas(ticket);
 
-      if (res.attachedViaShare) {
-        setShareFeedback('Ticket PNG downloaded & attached to WhatsApp share sheet!');
-      } else if (res.downloaded) {
+      // 2. Automatically download the prepared ticket as a PNG
+      const fileName = `Pool_Party_${ticket.category}_${ticket.ticket_number}.png`;
+      try {
+        const downloadLink = document.createElement('a');
+        downloadLink.href = canvas.toDataURL('image/png');
+        downloadLink.download = fileName;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+      } catch (dlErr) {
+        console.warn('Auto PNG download notice:', dlErr);
+      }
+
+      // 3. Convert the resulting PNG to a Blob
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/png', 0.95)
+      );
+
+      let sharedWithFile = false;
+
+      // 4. Attempt to share using the Web Share API (navigator.share) with the generated file attached
+      if (blob && typeof navigator !== 'undefined' && typeof File !== 'undefined') {
+        const shareFile = new File([blob], fileName, { type: 'image/png' });
+
+        if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+          try {
+            await navigator.share({
+              title: `Pool Party 2026 - Pass #${ticket.ticket_number}`,
+              text: message,
+              files: [shareFile],
+            });
+            sharedWithFile = true;
+            setShareFeedback('Ticket PNG downloaded & attached to WhatsApp share sheet!');
+          } catch (shareErr: any) {
+            if (shareErr?.name === 'AbortError') {
+              // User dismissed the native share sheet
+              setShareFeedback('Ticket PNG downloaded to your device.');
+              setTimeout(() => setShareFeedback(null), 5000);
+              return;
+            }
+            console.warn('navigator.share with file was rejected, using click-to-chat fallback:', shareErr);
+          }
+        }
+      }
+
+      // 5. Desktop fallback if navigator.share with files is not supported
+      if (!sharedWithFile) {
+        // Optional clipboard copy for instant Ctrl+V into WhatsApp Web
+        if (blob && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          } catch {
+            // non-fatal
+          }
+        }
+
+        const waUrl = WhatsAppService.generateWhatsAppUrl(ticket.buyer_phone || '', message);
+        window.open(waUrl, '_blank', 'noopener,noreferrer');
         setShareFeedback('Ticket PNG downloaded automatically! Paste or attach it into your WhatsApp message.');
       }
+
       setTimeout(() => setShareFeedback(null), 6000);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error sharing ticket to WhatsApp:', err);
+      try {
+        const fallbackUrl = WhatsAppService.generateWhatsAppUrl(ticket.buyer_phone || '', message);
+        window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+        setShareFeedback('Opened WhatsApp. Please attach your downloaded pass.');
+      } catch {
+        setShareFeedback('Failed to share ticket. Please use the Download PNG button.');
+      }
+      setTimeout(() => setShareFeedback(null), 6000);
     } finally {
       setIsSharingWhatsApp(false);
     }
@@ -206,11 +267,20 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
                   type="button"
                   onClick={handleShareWhatsApp}
                   disabled={isSharingWhatsApp || loading}
-                  className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-[#25D366] hover:bg-[#20ba59] disabled:opacity-50 text-slate-950 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                  className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-[#25D366] hover:bg-[#20ba59] active:bg-[#1caa4f] disabled:opacity-50 text-slate-950 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
                   title="Download ticket PNG automatically and share via WhatsApp"
                 >
-                  <Share2 className="w-4 h-4 shrink-0" />
-                  <span>{isSharingWhatsApp ? 'Preparing PNG...' : 'Share WhatsApp'}</span>
+                  {isSharingWhatsApp ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 shrink-0 animate-spin" />
+                      <span>Preparing &amp; Sharing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Share2 className="w-4 h-4 shrink-0" />
+                      <span>Share WhatsApp</span>
+                    </>
+                  )}
                 </button>
               </div>
             ) : (
