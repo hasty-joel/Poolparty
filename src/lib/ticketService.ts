@@ -24,8 +24,8 @@ export function isOnlineTicketRecord(t: {
   if (match) {
     const prefix = match[1];
     const num = parseInt(match[2], 10);
-    if (prefix === 'VIP' && num >= 21) return false;
-    if (prefix === 'ORD' && num >= 51) return false;
+    if (prefix === 'VIP' && num <= 50) return false;
+    if (prefix === 'ORD' && num <= 150) return false;
   }
   return true;
 }

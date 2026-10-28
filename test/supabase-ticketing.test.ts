@@ -2058,11 +2058,11 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
     }) as typeof fetch;
 
     try {
-      // 1. Rejects online pool numbers (ORD-001..ORD-050, VIP-001..VIP-020) and out-of-range numbers before RPC
+      // 1. Rejects online pool numbers (ORD-151..ORD-250, VIP-051..VIP-120) and out-of-range numbers before RPC
       const resOnlineForbidden = await fetch(`${baseUrl}/api/admin/hardcopy/activate`, {
         method: 'POST',
         headers: adminHeaders,
-        body: JSON.stringify({ ticketNumber: 'ORD-010', sellerName: 'Agent Kato' }),
+        body: JSON.stringify({ ticketNumber: 'ORD-160', sellerName: 'Agent Kato' }),
       });
       assert.strictEqual(resOnlineForbidden.status, 400);
       const onlineForbiddenBody = await resOnlineForbidden.json();

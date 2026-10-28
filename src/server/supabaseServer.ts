@@ -210,13 +210,13 @@ export function normalizeStrictOrderRef(raw: string): { valid: boolean; orderRef
 }
 
 export const HARDCOPY_RANGES = {
-  ORDINARY: { min: 51, max: 250, prefix: 'ORD', unitPriceUgx: 20000 },
-  VIP: { min: 21, max: 120, prefix: 'VIP', unitPriceUgx: 50000 },
+  ORDINARY: { min: 1, max: 150, prefix: 'ORD', unitPriceUgx: 20000 },
+  VIP: { min: 1, max: 50, prefix: 'VIP', unitPriceUgx: 50000 },
 } as const;
 
 export const ONLINE_RANGES = {
-  ORDINARY: { min: 1, max: 50, prefix: 'ORD', unitPriceUgx: 20000 },
-  VIP: { min: 1, max: 20, prefix: 'VIP', unitPriceUgx: 50000 },
+  ORDINARY: { min: 151, max: 250, prefix: 'ORD', unitPriceUgx: 20000 },
+  VIP: { min: 51, max: 120, prefix: 'VIP', unitPriceUgx: 50000 },
 } as const;
 
 /**
@@ -240,8 +240,8 @@ export function extractVerificationInput(raw: string): string {
 
 /**
  * Determines ticket channel from canonical ticket_number boundaries:
- * - Online:   VIP-001..VIP-020 (20), ORD-001..ORD-050 (50)
- * - Hardcopy: VIP-021..VIP-120 (100), ORD-051..ORD-250 (200)
+ * - Hardcopy: ORD-001..ORD-150 (150), VIP-001..VIP-050 (50)
+ * - Online:   ORD-151..ORD-250 (100), VIP-051..VIP-120 (70)
  */
 export function inferTicketChannelFromNumber(ticketNumber: string): 'online' | 'hardcopy' {
   const match = String(ticketNumber || '').trim().toUpperCase().match(TICKET_NUMBER_STRICT_REGEX);
@@ -249,9 +249,9 @@ export function inferTicketChannelFromNumber(ticketNumber: string): 'online' | '
   const prefix = match[1] as 'VIP' | 'ORD';
   const num = parseInt(match[2], 10);
   if (prefix === 'VIP') {
-    return num >= HARDCOPY_RANGES.VIP.min ? 'hardcopy' : 'online';
+    return num <= HARDCOPY_RANGES.VIP.max ? 'hardcopy' : 'online';
   }
-  return num >= HARDCOPY_RANGES.ORDINARY.min ? 'hardcopy' : 'online';
+  return num <= HARDCOPY_RANGES.ORDINARY.max ? 'hardcopy' : 'online';
 }
 
 /**
@@ -386,7 +386,7 @@ export function parseHardcopySelection(params: {
         return {
           valid: false,
           error: 'VALIDATION_ERROR',
-          message: `Invalid ticket number "${String(item).trim()}". Expected ORD-051..ORD-250 or VIP-021..VIP-120.`,
+          message: `Invalid ticket number "${String(item).trim()}". Expected ORD-001..ORD-150 or VIP-001..VIP-050.`,
         };
       }
 
@@ -452,7 +452,7 @@ export function parseHardcopySelection(params: {
       return {
         valid: false,
         error: 'VALIDATION_ERROR',
-        message: 'Invalid ticket number format. Expected ORD-051..ORD-250 or VIP-021..VIP-120.',
+        message: 'Invalid ticket number format. Expected ORD-001..ORD-150 or VIP-001..VIP-050.',
       };
     }
 
@@ -470,7 +470,7 @@ export function parseHardcopySelection(params: {
       return {
         valid: false,
         error: 'ONLINE_TICKET_FORBIDDEN',
-        message: `${parsed.formatted} belongs to the online ticket pool (${onlineBounds.prefix}-001 to ${onlineBounds.prefix}-${String(onlineBounds.max).padStart(3, '0')}) and cannot be managed as a hardcopy ticket.`,
+        message: `${parsed.formatted} belongs to the online ticket pool (${onlineBounds.prefix}-${String(onlineBounds.min).padStart(3, '0')} to ${onlineBounds.prefix}-${String(onlineBounds.max).padStart(3, '0')}) and cannot be managed as a hardcopy ticket.`,
       };
     }
 
@@ -566,11 +566,14 @@ export function parseHardcopySelection(params: {
   const bounds = HARDCOPY_RANGES[resolvedCategory];
   const onlineBounds = ONLINE_RANGES[resolvedCategory];
 
-  if (startParsed.num <= onlineBounds.max) {
+  if (
+    (startParsed.num >= onlineBounds.min && startParsed.num <= onlineBounds.max) ||
+    (endParsed.num >= onlineBounds.min && endParsed.num <= onlineBounds.max)
+  ) {
     return {
       valid: false,
       error: 'ONLINE_TICKET_FORBIDDEN',
-      message: `${bounds.prefix}-001 to ${bounds.prefix}-${String(onlineBounds.max).padStart(3, '0')} belong to the online ticket pool and cannot be activated as hardcopy tickets.`,
+      message: `${bounds.prefix}-${String(onlineBounds.min).padStart(3, '0')} to ${bounds.prefix}-${String(onlineBounds.max).padStart(3, '0')} belong to the online ticket pool and cannot be activated as hardcopy tickets.`,
     };
   }
 

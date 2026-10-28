@@ -796,9 +796,9 @@ notify pgrst, 'reload schema';`;
               <div className="flex items-center justify-between border-b border-white/10 pb-3">
                 <div className="flex items-center gap-2">
                   <DollarSign className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-base font-bold text-white">Overall 70-Ticket Status</h3>
+                  <h3 className="text-base font-bold text-white">Overall Online Status</h3>
                 </div>
-                <span className="text-xs font-mono text-slate-300">Cap: 70 Total</span>
+                <span className="text-xs font-mono text-slate-300">Cap: 170 Online (370 Total)</span>
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-center">
@@ -856,7 +856,7 @@ notify pgrst, 'reload schema';`;
                   activeTab === 'inventory' ? 'bg-amber-400 text-slate-950' : 'text-slate-400 hover:text-white bg-white/5'
                 }`}
               >
-                70 Inventory ({onlineTickets.length})
+                Online Passes ({onlineTickets.length})
               </button>
               <button
                 onClick={() => setActiveTab('orders')}
@@ -1701,9 +1701,9 @@ notify pgrst, 'reload schema';`;
                   onChange={(e) => setCategoryFilter(e.target.value as any)}
                   className="px-3 py-2 bg-[#030712] border border-white/15 rounded-xl text-xs text-white focus:outline-none"
                 >
-                  <option value="all">All Tiers (70 Total)</option>
-                  <option value="VIP">VIP (20 Max)</option>
-                  <option value="ORDINARY">ORDINARY (50 Max)</option>
+                  <option value="all">All Online Tiers (170 Total)</option>
+                  <option value="VIP">VIP (70 Online)</option>
+                  <option value="ORDINARY">ORDINARY (100 Online)</option>
                 </select>
 
                 <select

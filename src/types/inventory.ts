@@ -1,7 +1,7 @@
 /**
  * Supabase Schema-Aligned Inventory & Ticket Types
  * Table: public.tickets
- * Total: 70 tickets (20 VIP @ UGX 50,000 & 50 ORDINARY @ UGX 20,000)
+ * Total: 370 tickets (170 Online: 70 VIP & 100 ORDINARY; 200 Hardcopy: 50 VIP & 150 ORDINARY)
  */
 
 export type TicketCategory = 'VIP' | 'ORDINARY';
@@ -20,7 +20,7 @@ export type HardcopyAuditAction =
 
 export interface TicketRecord {
   id: string; // uuid
-  ticket_number: string; // Online: VIP-001..020, ORD-001..050 | Hardcopy: VIP-021..120, ORD-051..250
+  ticket_number: string; // Online: VIP-051..120, ORD-151..250 | Hardcopy: VIP-001..050, ORD-001..150
   category: TicketCategory;
   price_ugx: number;
   status: TicketDbStatus;

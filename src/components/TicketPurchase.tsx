@@ -263,7 +263,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
             <PoolPartyLogo variant="icon" size="sm" />
             <span className="text-amber-400 font-bold uppercase tracking-wider">Official Ticketing</span>
             <span aria-hidden="true">·</span>
-            <span>Capacity strictly limited to 70 total passes</span>
+            <span>Capacity strictly limited to 170 online passes (370 total passes)</span>
           </div>
           <h2 className="text-2xl xs:text-3xl sm:text-4xl font-black text-white font-display">
             Select Your Pool Pass
