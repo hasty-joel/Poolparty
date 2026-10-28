@@ -79,23 +79,48 @@ export const WhatsAppDeliveryModal: React.FC<WhatsAppDeliveryModalProps> = ({
     setTimeout(() => setCopiedMessage(false), 2000);
   };
 
-  const handleOpenWhatsApp = () => {
+  const handleOpenWhatsApp = async () => {
+    // 1. Automatically download the prepared ticket PNGs to the device
+    for (const t of tickets) {
+      try {
+        await TicketRenderer.downloadTicketImage(t);
+      } catch (err) {
+        console.warn('Auto download error on ticket', t.ticket_number, err);
+      }
+    }
+
+    // 2. If single ticket and browser supports file sharing, attach directly via Web Share API
+    if (tickets.length === 1 && WhatsAppService.canShareFiles()) {
+      try {
+        const res = await WhatsAppService.shareTicketFileViaWebShare(tickets[0], message);
+        if (res.shared) {
+          setShareFeedback('Ticket PNG downloaded & attached to WhatsApp share sheet!');
+          return;
+        }
+      } catch {
+        // proceed to url fallback
+      }
+    }
+
+    // 3. Fallback to click-to-chat URL
     const url = WhatsAppService.generateWhatsAppUrl(selectedPhone, message);
     window.open(url, '_blank', 'noopener,noreferrer');
+    setShareFeedback('Ticket PNG(s) downloaded automatically! Attach the image(s) to your WhatsApp chat.');
   };
 
   const handleShareFile = async (ticket: TicketRecord) => {
     setIsSharing(true);
     setShareFeedback(null);
     try {
-      const res = await WhatsAppService.shareTicketFileViaWebShare(ticket, message);
-      if (res.shared) {
-        setShareFeedback('Opened system share menu. Select WhatsApp to complete sending.');
-      } else if (res.error === 'USER_CANCELLED') {
-        // User dismissed sheet
-      } else {
-        // Fallback to opening WhatsApp link
-        handleOpenWhatsApp();
+      const res = await WhatsAppService.shareTicketWithAutoPng({
+        ticket,
+        message,
+        phone: selectedPhone,
+      });
+      if (res.attachedViaShare) {
+        setShareFeedback('Ticket PNG downloaded & attached to WhatsApp share sheet!');
+      } else if (res.downloaded) {
+        setShareFeedback('Ticket PNG downloaded automatically! Paste or attach it into your WhatsApp message.');
       }
     } catch {
       handleOpenWhatsApp();

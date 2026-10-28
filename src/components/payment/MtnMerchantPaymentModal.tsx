@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { TicketService } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
+import { WhatsAppService } from '../../lib/whatsappService';
 import { TicketRecord, TicketCategory } from '../../types/inventory';
 import { OrderStatus, VerificationStatus } from '../../types/order';
 
@@ -66,6 +67,8 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [copiedRef, setCopiedRef] = useState(false);
   const [copiedMerchantCode, setCopiedMerchantCode] = useState(false);
+  const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState<string | null>(null);
 
   // Merchant config
   const [merchantCode, setMerchantCode] = useState<string | undefined>(initialMerchantCode);
@@ -257,12 +260,34 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
     link.click();
   };
 
-  const handleShareWhatsApp = () => {
+  const handleShareWhatsApp = async () => {
     const ticket = issuedTickets[currentTicketIndex];
     if (!ticket) return;
 
-    const message = `🎉 I'm attending POOL PARTY 2026 at Prince Resort Bunamwaya (Bella), Uganda! My ${ticket.category} Ticket #${ticket.ticket_number} is confirmed. Get yours now!`;
-    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`, '_blank');
+    setIsSharingWhatsApp(true);
+    setShareFeedback(null);
+
+    const verifyUrl = `${window.location.origin}?verify=${encodeURIComponent(ticket.qr_token)}`;
+    const message = `🎉 I'm attending POOL PARTY 2026 at Prince Resort Bunamwaya (Bella), Uganda!\n\n🎟️ Pass #${ticket.ticket_number} (${ticket.category} Pass)\n👤 Guest: ${ticket.buyer_name || buyerName || 'Guest'}\n🔗 Verify: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026\nGet your passes now!`;
+
+    try {
+      const res = await WhatsAppService.shareTicketWithAutoPng({
+        ticket,
+        message,
+        phone: ticket.buyer_phone || buyerPhone || '',
+      });
+
+      if (res.attachedViaShare) {
+        setShareFeedback('Ticket PNG downloaded & attached to WhatsApp share sheet!');
+      } else if (res.downloaded) {
+        setShareFeedback('Ticket PNG downloaded automatically! Paste or attach it into your WhatsApp message.');
+      }
+      setTimeout(() => setShareFeedback(null), 6000);
+    } catch (err) {
+      console.error('Error sharing ticket via WhatsApp:', err);
+    } finally {
+      setIsSharingWhatsApp(false);
+    }
   };
 
   const formatTimer = (secs: number) => {
@@ -388,12 +413,21 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                 </button>
                 <button
                   onClick={handleShareWhatsApp}
-                  className="w-full py-2.5 px-3 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  disabled={isSharingWhatsApp}
+                  className="w-full py-2.5 px-3 rounded-xl bg-[#25D366] hover:bg-[#20ba59] text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shadow-sm"
+                  title="Automatically download ticket PNG and share on WhatsApp"
                 >
                   <Share2 className="w-4 h-4" />
-                  <span>Share Pass</span>
+                  <span>{isSharingWhatsApp ? 'Preparing PNG...' : 'Share Pass (WhatsApp)'}</span>
                 </button>
               </div>
+
+              {shareFeedback && (
+                <div className="p-2.5 rounded-lg bg-emerald-950/70 border border-emerald-500/50 text-emerald-300 text-xs flex items-center justify-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{shareFeedback}</span>
+                </div>
+              )}
 
               <p className="text-[11px] text-slate-400">
                 A confirmation has been saved. You can also retrieve your pass anytime using your phone number or Order Ref: <strong className="text-amber-300">{orderRef}</strong>.

@@ -20,10 +20,14 @@ import { TicketLookupModal } from './ticket/TicketLookupModal';
 
 interface TicketPurchaseProps {
   onContinueToPayment: (ticket: TicketRecord) => void;
+  selectedTierProp?: TicketTier | null;
 }
 
-export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPayment }) => {
-  const [selectedTier, setSelectedTier] = useState<TicketTier | null>(null);
+export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ 
+  onContinueToPayment,
+  selectedTierProp
+}) => {
+  const [selectedTier, setSelectedTier] = useState<TicketTier | null>(selectedTierProp ?? null);
   const [quantity, setQuantity] = useState<number>(1);
   const [form, setForm] = useState<BuyerForm>({
     fullName: '',
@@ -87,6 +91,24 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({ onContinueToPaym
     refreshCounts();
     TicketService.getMtnConfig().then(setMtnConfig);
   }, []);
+
+  useEffect(() => {
+    if (selectedTierProp) {
+      setSelectedTier(selectedTierProp);
+      setForm((prev) => ({ ...prev, tier: selectedTierProp }));
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next.inventory;
+        return next;
+      });
+      window.setTimeout(() => {
+        checkoutSectionRef.current?.scrollIntoView({
+          behavior: shouldReduceMotion ? 'auto' : 'smooth',
+          block: 'nearest',
+        });
+      }, 150);
+    }
+  }, [selectedTierProp, shouldReduceMotion]);
 
   const activeTier: TicketTier = selectedTier ?? 'ordinary';
   const tierInfo = TICKET_TIERS[activeTier];

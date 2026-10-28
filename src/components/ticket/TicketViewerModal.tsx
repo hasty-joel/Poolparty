@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Download, Copy, Check, Share2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { TicketRecord } from '../../types/inventory';
 import { TicketRenderer, isRenderableQrToken } from '../../lib/ticketRenderer';
+import { WhatsAppService } from '../../lib/whatsappService';
 
 interface TicketViewerModalProps {
   ticket: TicketRecord | null;
@@ -13,6 +14,8 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [canvasUrl, setCanvasUrl] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState<string | null>(null);
 
   const hasRenderableQr = Boolean(ticket && isRenderableQrToken(ticket.qr_token));
 
@@ -78,11 +81,32 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const whatsAppShareHref = hasRenderableQr
-    ? `https://wa.me/?text=${encodeURIComponent(
-        `Pool Party 2026 Ticket\n\nPass: #${ticket.ticket_number} (${ticket.category} Pass)\nGuest: ${ticket.buyer_name || 'Guest'}\nVerify Ticket: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026`
-      )}`
-    : '';
+  const handleShareWhatsApp = async () => {
+    if (!ticket || !hasRenderableQr) return;
+    setIsSharingWhatsApp(true);
+    setShareFeedback(null);
+
+    const message = `Pool Party 2026 Ticket 🎉\n\nPass: #${ticket.ticket_number} (${ticket.category} Pass)\nGuest: ${ticket.buyer_name || 'Guest'}\nVerify Ticket: ${verifyUrl}\n\nVenue: Prince Resort, Bunamwaya (Bella), Uganda\nDate: Friday, 11 December 2026\nTime: 12:00 PM Till Late`;
+
+    try {
+      const res = await WhatsAppService.shareTicketWithAutoPng({
+        ticket,
+        message,
+        phone: ticket.buyer_phone || '',
+      });
+
+      if (res.attachedViaShare) {
+        setShareFeedback('Ticket PNG downloaded & attached to WhatsApp share sheet!');
+      } else if (res.downloaded) {
+        setShareFeedback('Ticket PNG downloaded automatically! Paste or attach it into your WhatsApp message.');
+      }
+      setTimeout(() => setShareFeedback(null), 6000);
+    } catch (err) {
+      console.error('Error sharing ticket to WhatsApp:', err);
+    } finally {
+      setIsSharingWhatsApp(false);
+    }
+  };
 
   const guestName = ticket.buyer_name || 'Unassigned / Available';
 
@@ -178,19 +202,27 @@ export const TicketViewerModal: React.FC<TicketViewerModalProps> = ({ ticket, on
                   <span>{copiedLink ? 'Copied' : 'Copy Verify URL'}</span>
                 </button>
 
-                <a
-                  href={whatsAppShareHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                <button
+                  type="button"
+                  onClick={handleShareWhatsApp}
+                  disabled={isSharingWhatsApp || loading}
+                  className="w-full sm:w-auto min-h-[44px] px-3.5 py-2.5 bg-[#25D366] hover:bg-[#20ba59] disabled:opacity-50 text-slate-950 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                  title="Download ticket PNG automatically and share via WhatsApp"
                 >
                   <Share2 className="w-4 h-4 shrink-0" />
-                  <span>Share WhatsApp</span>
-                </a>
+                  <span>{isSharingWhatsApp ? 'Preparing PNG...' : 'Share WhatsApp'}</span>
+                </button>
               </div>
             ) : (
               <div className="text-xs text-slate-400">
                 QR download &amp; share controls require an unredacted pass token.
+              </div>
+            )}
+
+            {shareFeedback && (
+              <div className="w-full p-2.5 rounded-lg bg-emerald-950/70 border border-emerald-500/50 text-emerald-300 text-xs flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{shareFeedback}</span>
               </div>
             )}
 

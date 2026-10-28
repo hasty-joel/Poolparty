@@ -16,6 +16,7 @@ import { TicketViewerModal } from './components/ticket/TicketViewerModal';
 import { PublicTicketVerifyPage } from './components/ticket/PublicTicketVerifyPage';
 import { FlyerModal } from './components/FlyerModal';
 import { TicketRecord } from './types/inventory';
+import { TicketTier } from './types/event';
 
 type AppView = 'public' | 'admin' | 'scanner' | 'verify';
 
@@ -24,6 +25,7 @@ export default function App() {
   const [verifyToken, setVerifyToken] = useState<string>('');
   const [activeTicket, setActiveTicket] = useState<TicketRecord | null>(null);
   const [flyerModalOpen, setFlyerModalOpen] = useState(false);
+  const [selectedTier, setSelectedTier] = useState<TicketTier | null>(null);
 
   // Check URL query parameters for direct routing (?verify=<uuid> -> public read-only validity page; ?admin=true -> admin login)
   useEffect(() => {
@@ -57,6 +59,11 @@ export default function App() {
     if (el) {
       el.scrollIntoView({ behavior: 'smooth' });
     }
+  };
+
+  const handleHeroSelectTier = (tier: 'ordinary' | 'vip') => {
+    setSelectedTier(tier);
+    scrollToTickets();
   };
 
   // Public read-only QR pass validity check (?verify=<qr_token>)
@@ -123,6 +130,7 @@ export default function App() {
         <Hero
           onGetTicket={scrollToTickets}
           onViewFlyer={() => setFlyerModalOpen(true)}
+          onSelectTier={handleHeroSelectTier}
         />
 
         {/* Confirmed Lineup & Activities from Poster */}
@@ -130,6 +138,7 @@ export default function App() {
 
         {/* Live Inventory Ticket Purchase (Ordinary 20K / VIP 50K) */}
         <TicketPurchase
+          selectedTierProp={selectedTier}
           onContinueToPayment={(createdTicket) => setActiveTicket(createdTicket)}
         />
 

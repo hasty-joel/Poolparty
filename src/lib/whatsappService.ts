@@ -152,4 +152,109 @@ Get ready for an amazing Pool Party! 🔥`;
       return { shared: false, error: err?.message || 'SHARE_FAILED' };
     }
   },
+
+  /**
+   * Complete share handler that:
+   * 1. Automatically downloads the prepared ticket PNG to the user's device
+   * 2. Attempts to attach the PNG directly to WhatsApp via the Web Share API (mobile)
+   * 3. On desktop / fallback, copies PNG to clipboard (for instant Ctrl+V into WhatsApp Web)
+   *    and launches WhatsApp click-to-chat with the pre-filled message
+   */
+  async shareTicketWithAutoPng(params: {
+    ticket: TicketRecord;
+    message: string;
+    phone?: string;
+  }): Promise<{
+    downloaded: boolean;
+    attachedViaShare: boolean;
+    openedWhatsAppUrl: boolean;
+    error?: string;
+  }> {
+    const { ticket, message, phone = '' } = params;
+    let downloaded = false;
+    let attachedViaShare = false;
+    let openedWhatsAppUrl = false;
+
+    try {
+      // 1. Render ticket canvas
+      const canvas = await TicketRenderer.renderTicketToCanvas(ticket);
+
+      // 2. Automatically download the prepared ticket as a PNG
+      try {
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/png');
+        a.download = `Pool_Party_${ticket.category}_${ticket.ticket_number}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        downloaded = true;
+      } catch (dlErr) {
+        console.warn('Auto PNG download fallback error:', dlErr);
+      }
+
+      // 3. Attempt to attach PNG directly to WhatsApp using Web Share API with files
+      if (this.canShareFiles()) {
+        try {
+          const blob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob((b) => resolve(b), 'image/png', 0.95)
+          );
+
+          if (blob) {
+            const file = new File(
+              [blob],
+              `Pool_Party_2026_${ticket.category}_${ticket.ticket_number}.png`,
+              { type: 'image/png' }
+            );
+
+            await navigator.share({
+              title: `Pool Party 2026 - Pass #${ticket.ticket_number}`,
+              text: message,
+              files: [file],
+            });
+
+            attachedViaShare = true;
+            return { downloaded, attachedViaShare: true, openedWhatsAppUrl: false };
+          }
+        } catch (shareErr: any) {
+          if (shareErr?.name === 'AbortError') {
+            // User dismissed or cancelled the share dialog
+            return { downloaded, attachedViaShare: false, openedWhatsAppUrl: false };
+          }
+          // If share rejected or unsupported, proceed to WhatsApp URL fallback
+        }
+      }
+
+      // 4. Desktop / Web fallback: Copy PNG image to clipboard for instant pasting (Ctrl+V) into WhatsApp Web
+      try {
+        if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+          canvas.toBlob(async (blob) => {
+            if (blob) {
+              try {
+                await navigator.clipboard.write([
+                  new ClipboardItem({ 'image/png': blob })
+                ]);
+              } catch {
+                // Clipboard write optional
+              }
+            }
+          }, 'image/png');
+        }
+      } catch {
+        // non-blocking
+      }
+
+      // 5. Open WhatsApp with pre-filled message text
+      const waUrl = this.generateWhatsAppUrl(phone, message);
+      window.open(waUrl, '_blank', 'noopener,noreferrer');
+      openedWhatsAppUrl = true;
+
+      return { downloaded, attachedViaShare: false, openedWhatsAppUrl: true };
+    } catch (err: any) {
+      console.error('shareTicketWithAutoPng failure:', err);
+      // Fallback: still open WhatsApp URL
+      const waUrl = this.generateWhatsAppUrl(phone, message);
+      window.open(waUrl, '_blank', 'noopener,noreferrer');
+      return { downloaded, attachedViaShare: false, openedWhatsAppUrl: true, error: err?.message };
+    }
+  },
 };

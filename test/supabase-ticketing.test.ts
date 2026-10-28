@@ -4128,6 +4128,118 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       await stopServer();
     }
   });
+
+  it('42. WhatsApp Share: Automatic PNG Download & Native File Attachment Coordination', async () => {
+    assert.strictEqual(typeof WhatsAppService.shareTicketWithAutoPng, 'function');
+    assert.strictEqual(typeof WhatsAppService.canShareFiles, 'function');
+
+    const sampleTicket: any = {
+      id: '99999999-9999-4999-8999-999999999999',
+      ticket_number: 'VIP-009',
+      category: 'VIP',
+      price_ugx: 50000,
+      status: 'issued',
+      payment_status: 'paid',
+      buyer_name: 'Grace Akello',
+      buyer_phone: '0775198484',
+      qr_token: '11111111-2222-3333-4444-555555555555',
+    };
+
+    let downloadedUrl: string | null = null;
+    let openedUrl: string | null = null;
+    let sharedFiles: any[] = [];
+
+    // Mock DOM / Canvas environment for Node.js test runner
+    const origWindow = globalThis.window;
+    const origDoc = globalThis.document;
+    const origNav = globalThis.navigator;
+    const origRender = TicketRenderer.renderTicketToCanvas;
+
+    const mockCanvas = {
+      toDataURL: (type: string) => `data:${type};base64,mockPngBase64DataForPoolPartyTicket`,
+      toBlob: (cb: (b: any) => void) => cb({ size: 1024, type: 'image/png' }),
+    };
+
+    (TicketRenderer as any).renderTicketToCanvas = async () => mockCanvas as any;
+
+    (globalThis as any).window = {
+      location: { origin: 'https://poolparty.ug' },
+      open: (url: string) => {
+        openedUrl = url;
+        return null;
+      },
+    };
+
+    (globalThis as any).document = {
+      body: {
+        appendChild: () => {},
+        removeChild: () => {},
+      },
+      createElement: (tag: string) => {
+        if (tag === 'a') {
+          return {
+            set href(val: string) { downloadedUrl = val; },
+            download: '',
+            click: () => {},
+          };
+        }
+        return {};
+      },
+    };
+
+    const mockNavigator = {
+      canShare: (data: any) => Boolean(data && data.files),
+      share: async (data: any) => {
+        sharedFiles = data.files || [];
+      },
+    };
+
+    const origNavDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', {
+      value: mockNavigator,
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      // 1. In environment supporting file sharing (e.g. mobile Safari/Chrome):
+      // Must automatically download the PNG AND attach file in navigator.share for WhatsApp
+      const resWithFileShare = await WhatsAppService.shareTicketWithAutoPng({
+        ticket: sampleTicket,
+        message: 'Pool Party 2026 Ticket',
+        phone: '0775198484',
+      });
+
+      assert.strictEqual(resWithFileShare.downloaded, true, 'Must automatically download PNG');
+      assert.strictEqual(resWithFileShare.attachedViaShare, true, 'Must attach file to share sheet');
+      assert.ok(typeof downloadedUrl === 'string' && (downloadedUrl as string).includes('data:image/png'), 'Must download valid image/png data url');
+      assert.strictEqual(sharedFiles.length, 1, 'Must attach exactly 1 ticket PNG file');
+
+      // 2. In desktop environment without navigator.share:
+      // Must automatically download the PNG AND open wa.me URL
+      (globalThis as any).navigator.canShare = () => false;
+      downloadedUrl = null;
+      openedUrl = null;
+
+      const resDesktop = await WhatsAppService.shareTicketWithAutoPng({
+        ticket: sampleTicket,
+        message: 'Pool Party 2026 Ticket',
+        phone: '0775198484',
+      });
+
+      assert.strictEqual(resDesktop.downloaded, true, 'Must automatically download PNG on desktop as well');
+      assert.strictEqual(resDesktop.attachedViaShare, false);
+      assert.strictEqual(resDesktop.openedWhatsAppUrl, true);
+      assert.ok(typeof openedUrl === 'string' && (openedUrl as string).startsWith('https://wa.me/256775198484?text='), 'Must launch wa.me click-to-chat URL');
+    } finally {
+      TicketRenderer.renderTicketToCanvas = origRender;
+      globalThis.window = origWindow;
+      globalThis.document = origDoc;
+      if (origNavDescriptor) {
+        Object.defineProperty(globalThis, 'navigator', origNavDescriptor);
+      }
+    }
+  });
 });
 
 

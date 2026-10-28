@@ -6,9 +6,10 @@ import heroPoolImg from '../assets/images/hero_pool_luxury_1793036984424.jpg';
 interface HeroProps {
   onGetTicket: () => void;
   onViewFlyer: () => void;
+  onSelectTier?: (tier: 'ordinary' | 'vip') => void;
 }
 
-export const Hero: React.FC<HeroProps> = ({ onGetTicket, onViewFlyer }) => {
+export const Hero: React.FC<HeroProps> = ({ onGetTicket, onViewFlyer, onSelectTier }) => {
   const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
 
   useEffect(() => {
@@ -72,22 +73,57 @@ export const Hero: React.FC<HeroProps> = ({ onGetTicket, onViewFlyer }) => {
             </div>
 
             {/* Direct Ticket Tier Strip: Ordinary 20K | VIP 50K */}
-            <div className="w-full max-w-md p-3 sm:p-4 rounded-xl bg-[#0d1522] border border-white/10">
+            <div className="w-full max-w-md p-2 sm:p-2.5 rounded-xl bg-[#0d1522] border border-white/10 shadow-lg shadow-black/40">
               <div className="grid grid-cols-2 divide-x divide-white/10 text-center">
-                <div className="px-1.5 sm:px-3">
-                  <span className="text-[10px] sm:text-[11px] uppercase tracking-wider text-slate-400 block font-medium">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectTier ? onSelectTier('ordinary') : onGetTicket()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      if (onSelectTier) onSelectTier('ordinary');
+                      else onGetTicket();
+                    }
+                  }}
+                  className="px-2 sm:px-3 py-2 sm:py-2.5 rounded-lg transition-all duration-200 cursor-pointer group hover:bg-white/[0.04] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 select-none"
+                  aria-label="Select Ordinary Pass for UGX 20,000"
+                >
+                  <span className="text-[10px] sm:text-[11px] uppercase tracking-wider text-slate-400 group-hover:text-slate-200 block font-semibold transition-colors">
                     Ordinary Pass
                   </span>
-                  <span className="text-lg xs:text-xl sm:text-2xl font-black text-white font-mono tabular-nums">
+                  <span className="text-lg xs:text-xl sm:text-2xl font-black text-white font-mono tabular-nums block mt-0.5 group-hover:text-amber-100 transition-colors">
                     UGX 20,000
                   </span>
+                  <span className="text-[10px] sm:text-[11px] font-semibold text-slate-400 group-hover:text-amber-300 flex items-center justify-center gap-1 mt-1 transition-colors">
+                    <span>Select Pass</span>
+                    <span className="group-hover:translate-x-0.5 transition-transform">→</span>
+                  </span>
                 </div>
-                <div className="px-1.5 sm:px-3">
-                  <span className="text-[10px] sm:text-[11px] uppercase tracking-wider text-slate-400 block font-medium">
+
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectTier ? onSelectTier('vip') : onGetTicket()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      if (onSelectTier) onSelectTier('vip');
+                      else onGetTicket();
+                    }
+                  }}
+                  className="px-2 sm:px-3 py-2 sm:py-2.5 rounded-lg transition-all duration-200 cursor-pointer group hover:bg-amber-400/[0.08] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 select-none"
+                  aria-label="Select VIP Pass for UGX 50,000"
+                >
+                  <span className="text-[10px] sm:text-[11px] uppercase tracking-wider text-amber-400 group-hover:text-amber-300 block font-semibold transition-colors">
                     VIP Pass
                   </span>
-                  <span className="text-lg xs:text-xl sm:text-2xl font-black text-amber-300 font-mono tabular-nums">
+                  <span className="text-lg xs:text-xl sm:text-2xl font-black text-amber-300 font-mono tabular-nums block mt-0.5 group-hover:text-amber-200 transition-colors">
                     UGX 50,000
+                  </span>
+                  <span className="text-[10px] sm:text-[11px] font-semibold text-amber-400/90 group-hover:text-amber-200 flex items-center justify-center gap-1 mt-1 transition-colors">
+                    <span>Select VIP</span>
+                    <span className="group-hover:translate-x-0.5 transition-transform">→</span>
                   </span>
                 </div>
               </div>
