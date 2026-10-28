@@ -15,12 +15,14 @@ import { GateScanner } from './components/scanner/GateScanner';
 import { TicketViewerModal } from './components/ticket/TicketViewerModal';
 import { PublicTicketVerifyPage } from './components/ticket/PublicTicketVerifyPage';
 import { FlyerModal } from './components/FlyerModal';
+import { Preloader } from './components/Preloader';
 import { TicketRecord } from './types/inventory';
 import { TicketTier } from './types/event';
 
 type AppView = 'public' | 'admin' | 'scanner' | 'verify';
 
 export default function App() {
+  const [loadingPreloader, setLoadingPreloader] = useState(true);
   const [currentView, setCurrentView] = useState<AppView>('public');
   const [verifyToken, setVerifyToken] = useState<string>('');
   const [activeTicket, setActiveTicket] = useState<TicketRecord | null>(null);
@@ -160,6 +162,14 @@ export default function App() {
         isOpen={flyerModalOpen}
         onClose={() => setFlyerModalOpen(false)}
       />
+
+      {/* 3-Second Luxury Preloader */}
+      {loadingPreloader && (
+        <Preloader
+          onComplete={() => setLoadingPreloader(false)}
+          durationMs={3000}
+        />
+      )}
     </div>
   );
 }

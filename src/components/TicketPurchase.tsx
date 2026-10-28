@@ -17,6 +17,7 @@ import { TicketService } from '../lib/ticketService';
 import { TicketRecord, PublicInventoryCounts } from '../types/inventory';
 import { MtnMerchantPaymentModal } from './payment/MtnMerchantPaymentModal';
 import { TicketLookupModal } from './ticket/TicketLookupModal';
+import { PoolPartyLogo } from './brand/PoolPartyLogo';
 
 interface TicketPurchaseProps {
   onContinueToPayment: (ticket: TicketRecord) => void;
@@ -253,7 +254,8 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
         
         {/* Section Header */}
         <div className="max-w-2xl mb-8 sm:mb-10">
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs font-semibold text-slate-400 mb-1">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] sm:text-xs font-semibold text-slate-400 mb-2">
+            <PoolPartyLogo variant="icon" size="sm" />
             <span className="text-amber-400 font-bold uppercase tracking-wider">Official Ticketing</span>
             <span aria-hidden="true">·</span>
             <span>Capacity strictly limited to 70 total passes</span>

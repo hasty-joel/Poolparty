@@ -1,6 +1,7 @@
 import React from 'react';
 import { Phone, ArrowUp } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
+import { PoolPartyLogo } from './brand/PoolPartyLogo';
 
 export const Footer: React.FC = () => {
   const scrollToTop = () => {
@@ -13,12 +14,10 @@ export const Footer: React.FC = () => {
         <div className="flex flex-col md:flex-row items-center justify-between gap-6 pb-8 border-b border-white/10 text-center md:text-left">
           
           {/* Brand */}
-          <div>
-            <span className="text-sm font-bold text-white tracking-wide font-display block">
-              Prince Resort Bunamwaya (Bella)
-            </span>
-            <p className="text-xs text-slate-400 mt-0.5">
-              POOL PARTY · Friday, 11 December 2026 · From 12:00 PM till late
+          <div className="flex flex-col items-center md:items-start gap-1">
+            <PoolPartyLogo variant="full" size="sm" />
+            <p className="text-xs text-slate-400 mt-1">
+              Friday, 11 December 2026 · From 12:00 PM till late
             </p>
           </div>
 

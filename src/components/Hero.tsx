@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, MapPin, Ticket, Eye, Music } from 'lucide-react';
+import { Calendar, Clock, MapPin, Ticket, Eye, Music, Sparkles } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
+import { PoolPartyLogo } from './brand/PoolPartyLogo';
 import heroPoolImg from '../assets/images/hero_pool_luxury_1793036984424.jpg';
 
 interface HeroProps {
@@ -53,9 +54,17 @@ export const Hero: React.FC<HeroProps> = ({ onGetTicket, onViewFlyer, onSelectTi
           {/* Left Column: Event details, bold typography, pricing */}
           <div className="lg:col-span-7 flex flex-col items-center lg:items-start text-center lg:text-left space-y-5 sm:space-y-6">
             
+            {/* Official Brand Logo Badge */}
+            <div className="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-900/90 border border-white/15 backdrop-blur-md shadow-md">
+              <PoolPartyLogo variant="icon" size="sm" />
+              <span className="text-[11px] sm:text-xs font-semibold text-slate-200">
+                Official Event Pass · Prince Resort
+              </span>
+            </div>
+
             {/* Editorial metadata kicker */}
             <div className="flex flex-wrap items-center justify-center lg:justify-start gap-1.5 sm:gap-2 text-[11px] sm:text-xs font-semibold text-slate-400">
-              <span className="text-amber-400">Prince Resort Bunamwaya</span>
+              <span className="text-amber-400 font-bold">Prince Resort Bunamwaya</span>
               <span aria-hidden="true">·</span>
               <span>Friday, 11 December 2026</span>
               <span aria-hidden="true">·</span>

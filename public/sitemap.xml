@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <!-- Main Event Landing Page -->
+  <url>
+    <loc>https://ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app/</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app/assets/aistudio/Luxury_Tropical_Pool_Party_Flyer_724fe1fb.png</image:loc>
+      <image:title>Official POOL PARTY Poster 2026</image:title>
+      <image:caption>Friday 11 Dec 2026 at Prince Resort Bunamwaya Bella Uganda</image:caption>
+    </image:image>
+  </url>
+
+  <!-- Tickets & Pass Booking Section -->
+  <url>
+    <loc>https://ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app/#tickets</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+
+  <!-- Lineup, DJs & Activities -->
+  <url>
+    <loc>https://ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app/#lineup</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+
+  <!-- Venue Location & Prince Resort Bunamwaya Directions -->
+  <url>
+    <loc>https://ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app/#location</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+
+  <!-- FAQ Section -->
+  <url>
+    <loc>https://ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app/#faq</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+</urlset>

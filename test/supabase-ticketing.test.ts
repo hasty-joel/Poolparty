@@ -4240,6 +4240,45 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
       }
     }
   });
+
+  it('43. Google Search Console & SEO Readiness: sitemap.xml, robots.txt, and verification metadata', async () => {
+    await startServer();
+    try {
+      // 1. Verify sitemap.xml endpoint
+      const sitemapRes = await fetch(`${baseUrl}/sitemap.xml`);
+      assert.strictEqual(sitemapRes.status, 200, 'sitemap.xml must return 200 OK');
+      const sitemapType = sitemapRes.headers.get('content-type') || '';
+      assert.ok(sitemapType.includes('application/xml'), 'sitemap.xml must return application/xml content-type');
+      const sitemapText = await sitemapRes.text();
+      assert.ok(sitemapText.includes('<?xml version="1.0" encoding="UTF-8"?>'), 'Must have XML declaration');
+      assert.ok(sitemapText.includes('<urlset'), 'Must contain <urlset>');
+      assert.ok(sitemapText.includes('<loc>'), 'Must contain <loc> entries');
+      assert.ok(sitemapText.includes('#tickets'), 'Must include #tickets link');
+      assert.ok(sitemapText.includes('Luxury_Tropical_Pool_Party_Flyer'), 'Must include poster image entry');
+
+      // 2. Verify robots.txt endpoint
+      const robotsRes = await fetch(`${baseUrl}/robots.txt`);
+      assert.strictEqual(robotsRes.status, 200, 'robots.txt must return 200 OK');
+      const robotsType = robotsRes.headers.get('content-type') || '';
+      assert.ok(robotsType.includes('text/plain'), 'robots.txt must return text/plain content-type');
+      const robotsText = await robotsRes.text();
+      assert.ok(robotsText.includes('User-agent: *'), 'Must allow search bots');
+      assert.ok(robotsText.includes('Allow: /'), 'Must allow root path');
+      assert.ok(robotsText.includes('Disallow: /api/'), 'Must disallow /api/');
+      assert.ok(robotsText.includes('Sitemap:'), 'Must reference sitemap');
+
+      // 3. Verify index.html contains google-site-verification and favicon
+      const indexPath = path.resolve(process.cwd(), 'index.html');
+      const indexHtml = fs.readFileSync(indexPath, 'utf8');
+      assert.ok(indexHtml.includes('name="google-site-verification"'), 'index.html must have google-site-verification tag');
+      assert.ok(indexHtml.includes('1mpWN_u8Abjr7N9On1e6g6j5XKJ7-Zx7pmUZD9tY3-I'), 'Must contain exact user verification token');
+      assert.ok(indexHtml.includes('rel="icon"'), 'index.html must link favicon');
+      assert.ok(indexHtml.includes('rel="canonical"'), 'index.html must specify canonical URL');
+      assert.ok(indexHtml.includes('name="robots"'), 'index.html must have robots directives');
+    } finally {
+      await stopServer();
+    }
+  });
 });
 
 

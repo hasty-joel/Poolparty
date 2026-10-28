@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Ticket, Phone, Lock, QrCode, Menu, X } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
+import { PoolPartyLogo } from './brand/PoolPartyLogo';
 
 interface NavbarProps {
   onTicketClick: () => void;
@@ -19,7 +20,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     <header className="fixed top-0 left-0 right-0 z-40 bg-[#080c14]/95 backdrop-blur-md border-b border-white/10">
       <div className="w-full max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 h-15 sm:h-18 flex items-center justify-between gap-1.5 sm:gap-4 lg:gap-8">
         
-        {/* Zone 1: Brand Wordmark */}
+        {/* Zone 1: Brand Wordmark & Official Logo */}
         <a
           href="#"
           onClick={(e) => {
@@ -27,18 +28,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           className="flex items-center gap-1.5 sm:gap-3 min-w-0 shrink group"
+          aria-label="POOL PARTY at Prince Resort Bunamwaya"
         >
-          <div className="w-7 h-7 sm:w-8 sm:h-8 shrink-0 rounded-lg bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 font-bold text-xs sm:text-sm font-display">
-            PR
-          </div>
-          <div className="flex flex-col min-w-0 max-w-[125px] xs:max-w-[165px] sm:max-w-none">
-            <span className="text-[8.5px] sm:text-[10px] uppercase tracking-wider sm:tracking-widest text-slate-400 font-semibold leading-none truncate">
-              Prince Resort Bunamwaya
-            </span>
-            <span className="text-sm sm:text-lg font-black tracking-tight text-white font-display leading-tight group-hover:text-amber-300 transition-colors truncate">
-              POOL PARTY
-            </span>
-          </div>
+          <PoolPartyLogo variant="full" size="md" />
         </a>
 
         {/* Zone 2: Navigation Links (Desktop) */}

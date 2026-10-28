@@ -28,6 +28,74 @@ export function createExpressApp() {
     next();
   });
 
+  // Public SEO sitemap endpoint for Google Search Console
+  app.get('/sitemap.xml', (req, res) => {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host || 'ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app';
+    const baseUrl = `${protocol}://${host}`;
+
+    const sitemapContent = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>${baseUrl}/</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>${baseUrl}/assets/aistudio/Luxury_Tropical_Pool_Party_Flyer_724fe1fb.png</image:loc>
+      <image:title>Official POOL PARTY Poster 2026</image:title>
+      <image:caption>Friday 11 Dec 2026 at Prince Resort Bunamwaya Bella Uganda</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>${baseUrl}/#tickets</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/#lineup</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/#location</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>${baseUrl}/#faq</loc>
+    <lastmod>2026-10-28</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+</urlset>`;
+
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+    return res.status(200).send(sitemapContent);
+  });
+
+  // Public robots.txt endpoint for Googlebot and search crawlers
+  app.get('/robots.txt', (req, res) => {
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host || 'ais-pre-5vrplxgqo6735aok6aiyno-93704042071.europe-west3.run.app';
+    const baseUrl = `${protocol}://${host}`;
+
+    const robotsContent = `User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: ${baseUrl}/sitemap.xml
+`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+    return res.status(200).send(robotsContent);
+  });
+
   // Master admin authorization check (strictly excludes gate_staff sessions & credentials)
   const getAdminPasscode = () => GateSecurity.getConfiguredAdminPasscode();
 

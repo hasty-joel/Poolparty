@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <radialGradient id="bgGrad" cx="50%" cy="30%" r="70%" fx="50%" fy="20%">
+      <stop offset="0%" stop-color="#0f233d" />
+      <stop offset="60%" stop-color="#070e1b" />
+      <stop offset="100%" stop-color="#03060d" />
+    </radialGradient>
+
+    <!-- Sun & Gold Flare Gradient -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="35%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+
+    <!-- Tropical Cyan Water Gradient -->
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67e8f9" />
+      <stop offset="50%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#0e7490" />
+    </linearGradient>
+
+    <!-- Deep Water Gradient -->
+    <linearGradient id="deepWater" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0891b2" />
+      <stop offset="100%" stop-color="#164e63" />
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="5" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Squircle Base with Border -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="4" />
+  <rect x="20" y="20" width="472" height="472" rx="104" fill="none" stroke="url(#cyanGrad)" stroke-width="2" opacity="0.4" />
+
+  <!-- Subtle Ambient Glow in Center -->
+  <circle cx="256" cy="230" r="140" fill="#06b6d4" opacity="0.12" filter="url(#glow)" />
+  <circle cx="256" cy="180" r="80" fill="#fbbf24" opacity="0.15" filter="url(#glow)" />
+
+  <!-- Tropical Sun Crest (Top) -->
+  <g filter="url(#softGlow)">
+    <!-- Sun Core -->
+    <circle cx="256" cy="175" r="46" fill="url(#goldGrad)" />
+    <!-- Sun Rays / Crown -->
+    <path d="M 256 95 L 256 115" stroke="url(#goldGrad)" stroke-width="7" stroke-linecap="round" />
+    <path d="M 195 118 L 210 133" stroke="url(#goldGrad)" stroke-width="7" stroke-linecap="round" />
+    <path d="M 317 118 L 302 133" stroke="url(#goldGrad)" stroke-width="7" stroke-linecap="round" />
+    <path d="M 170 175 L 190 175" stroke="url(#goldGrad)" stroke-width="7" stroke-linecap="round" />
+    <path d="M 322 175 L 342 175" stroke="url(#goldGrad)" stroke-width="7" stroke-linecap="round" />
+  </g>
+
+  <!-- Palm Leaf Silhouette Accents (Left & Right of Sun) -->
+  <path d="M 185 160 C 145 145, 120 180, 110 215 C 130 205, 155 195, 185 190 Z" fill="url(#cyanGrad)" opacity="0.75" />
+  <path d="M 327 160 C 367 145, 392 180, 402 215 C 382 205, 357 195, 327 190 Z" fill="url(#cyanGrad)" opacity="0.75" />
+
+  <!-- Dynamic Tropical Pool Waves (Crest 1 - Top) -->
+  <path d="M 100 270 C 150 240, 200 290, 256 260 C 312 230, 362 280, 412 250 L 412 285 C 362 315, 312 265, 256 295 C 200 325, 150 275, 100 305 Z" 
+        fill="url(#cyanGrad)" filter="url(#softGlow)" />
+
+  <!-- Dynamic Tropical Pool Waves (Crest 2 - Middle) -->
+  <path d="M 90 325 C 145 295, 200 345, 256 315 C 312 285, 367 335, 422 305 L 422 345 C 367 375, 312 325, 256 355 C 200 385, 145 335, 90 365 Z" 
+        fill="url(#cyanGrad)" opacity="0.9" />
+
+  <!-- Dynamic Tropical Pool Waves (Crest 3 - Deep) -->
+  <path d="M 100 385 C 155 355, 205 400, 256 375 C 307 350, 357 395, 412 365 L 412 395 C 357 425, 307 380, 256 405 C 205 430, 155 385, 100 415 Z" 
+        fill="url(#deepWater)" opacity="0.7" />
+
+  <!-- Elegant Monogram Accent "PP" (Pool Party) in Gold -->
+  <g opacity="0.95">
+    <text x="256" y="248" 
+          font-family="system-ui, -apple-system, sans-serif" 
+          font-size="44" 
+          font-weight="900" 
+          letter-spacing="4" 
+          text-anchor="middle" 
+          fill="#ffffff">POOL PARTY</text>
+  </g>
+</svg>
