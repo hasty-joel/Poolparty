@@ -21,7 +21,9 @@ import {
   Volume2,
   VolumeX,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { TicketService } from '../../lib/ticketService';
@@ -178,6 +180,7 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
   const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
 
   const [gatePasscode, setGatePasscode] = useState('');
+  const [showPasscode, setShowPasscode] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -677,8 +680,8 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#080c14] text-slate-100 flex items-center justify-center p-3 sm:p-4">
-        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-5 sm:p-8 shadow-2xl space-y-5">
+      <div className="min-h-[100dvh] w-full bg-[#080c14] text-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto">
+        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-5 sm:p-8 shadow-2xl space-y-5 my-auto">
           <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-400/20 text-cyan-300 flex items-center justify-center mx-auto">
             <Lock className="w-6 h-6" />
           </div>
@@ -703,21 +706,40 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
               <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
                 Gate Staff Passcode
               </label>
-              <input
-                type="password"
-                value={gatePasscode}
-                onChange={(e) => setGatePasscode(e.target.value)}
-                placeholder="Enter gate staff passcode"
-                className="w-full px-3.5 sm:px-4 py-3 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm min-h-[46px] focus:outline-none focus:border-cyan-400 font-mono transition-colors"
-                autoFocus
-                required
-              />
+              <div className="relative flex items-center">
+                <input
+                  type={showPasscode ? 'text' : 'password'}
+                  value={gatePasscode}
+                  onChange={(e) => {
+                    setGatePasscode(e.target.value);
+                    if (loginError) setLoginError(null);
+                  }}
+                  placeholder="Enter gate staff passcode"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="current-password"
+                  enterKeyHint="go"
+                  inputMode="text"
+                  className="w-full pl-3.5 sm:pl-4 pr-12 py-3.5 bg-[#080c14] border border-white/15 rounded-xl text-white text-base min-h-[48px] focus:outline-none focus:border-cyan-400 font-mono transition-colors touch-manipulation"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPasscode(!showPasscode)}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-400 hover:text-white active:text-cyan-400 transition-colors cursor-pointer touch-manipulation focus:outline-none"
+                  aria-label={showPasscode ? 'Hide passcode' : 'Show passcode'}
+                  tabIndex={-1}
+                >
+                  {showPasscode ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
             </div>
 
             <button
               type="submit"
               disabled={isLoggingIn || !gatePasscode.trim()}
-              className="w-full min-h-[46px] py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 font-bold rounded-lg text-xs uppercase tracking-wider shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-2"
+              className="w-full min-h-[48px] py-3.5 px-4 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 active:scale-[0.99] disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs uppercase tracking-wider shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2 touch-manipulation select-none"
             >
               {isLoggingIn ? (
                 <>
@@ -737,7 +759,7 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
             <span>Pool Gate 1 · Staff Only</span>
             <button
               onClick={onBack}
-              className="text-cyan-400 hover:underline cursor-pointer py-1"
+              className="text-cyan-400 hover:underline cursor-pointer py-1.5 touch-manipulation"
             >
               Back to Website
             </button>
