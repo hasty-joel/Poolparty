@@ -124,14 +124,10 @@ export const TicketService = {
   setAdminToken(token: string) {
     _adminToken = token;
     try {
-      if (typeof window !== 'undefined') {
-        if (token) {
-          window.sessionStorage?.setItem('poolparty_admin_passcode', token);
-          window.localStorage?.setItem('poolparty_admin_passcode', token);
-        } else {
-          window.sessionStorage?.removeItem('poolparty_admin_passcode');
-          window.localStorage?.removeItem('poolparty_admin_passcode');
-        }
+      if (token) {
+        sessionStorage.setItem('poolparty_admin_passcode', token);
+      } else {
+        sessionStorage.removeItem('poolparty_admin_passcode');
       }
     } catch {}
   },
@@ -143,12 +139,7 @@ export const TicketService = {
   getAdminToken(): string {
     if (_adminToken) return _adminToken;
     try {
-      if (typeof window !== 'undefined') {
-        const fromSession = window.sessionStorage?.getItem('poolparty_admin_passcode');
-        if (fromSession) return fromSession;
-        return window.localStorage?.getItem('poolparty_admin_passcode') || '';
-      }
-      return '';
+      return sessionStorage.getItem('poolparty_admin_passcode') || '';
     } catch {
       return '';
     }
@@ -169,14 +160,10 @@ export const TicketService = {
   setGateSessionToken(token: string) {
     _gateSessionToken = token;
     try {
-      if (typeof window !== 'undefined') {
-        if (token) {
-          window.sessionStorage?.setItem('poolparty_gate_session', token);
-          window.localStorage?.setItem('poolparty_gate_session', token);
-        } else {
-          window.sessionStorage?.removeItem('poolparty_gate_session');
-          window.localStorage?.removeItem('poolparty_gate_session');
-        }
+      if (token) {
+        sessionStorage.setItem('poolparty_gate_session', token);
+      } else {
+        sessionStorage.removeItem('poolparty_gate_session');
       }
     } catch {}
   },
@@ -184,12 +171,7 @@ export const TicketService = {
   getGateSessionToken(): string {
     if (_gateSessionToken) return _gateSessionToken;
     try {
-      if (typeof window !== 'undefined') {
-        const fromSession = window.sessionStorage?.getItem('poolparty_gate_session');
-        if (fromSession) return fromSession;
-        return window.localStorage?.getItem('poolparty_gate_session') || '';
-      }
-      return '';
+      return sessionStorage.getItem('poolparty_gate_session') || '';
     } catch {
       return '';
     }

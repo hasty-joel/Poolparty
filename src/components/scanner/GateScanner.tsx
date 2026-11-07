@@ -23,9 +23,7 @@ import {
   RotateCcw,
   Sparkles,
   Eye,
-  EyeOff,
-  Copy,
-  Check
+  EyeOff
 } from 'lucide-react';
 import jsQR from 'jsqr';
 import { TicketService } from '../../lib/ticketService';
@@ -185,7 +183,6 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
   const [showPasscode, setShowPasscode] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [copiedPasscode, setCopiedPasscode] = useState(false);
 
   // Camera & Scanner State
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -631,20 +628,15 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
   // GATE LOGIN / LOGOUT
   // -------------------------------------------------------------
 
-  const submitWithPasscode = async (rawCode: string) => {
-    const cleaned = (rawCode || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-    if (!cleaned || isLoggingIn) {
-      if (!cleaned) setLoginError('Please enter the gate staff passcode.');
-      return;
-    }
-
-    const normalized = cleaned.toLowerCase() === 'gate_staff_secure_2026' ? 'gate_staff_secure_2026' : cleaned;
+  const handleGateLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!gatePasscode.trim() || isLoggingIn) return;
 
     setIsLoggingIn(true);
     setLoginError(null);
 
     try {
-      const res = await TicketService.loginGateSession(normalized);
+      const res = await TicketService.loginGateSession(gatePasscode.trim());
       if (res.success && res.authenticated) {
         setGatePasscode('');
         setIsAuthenticated(true);
@@ -652,38 +644,13 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
         setSessionExpiresAt(res.expiresAt || null);
         setResult(null);
       } else {
-        if (res.error === 'RATE_LIMITED') {
-          const waitMsg = res.retryAfterSeconds ? ` Please wait ${res.retryAfterSeconds}s before trying again.` : ' Please wait before trying again.';
-          setLoginError('Too many failed gate passcode attempts.' + waitMsg);
-        } else {
-          setLoginError(res.message || 'Invalid gate staff passcode.');
-        }
+        setLoginError(res.message || 'Invalid gate staff passcode.');
       }
     } catch {
       setLoginError('Network error signing into gate checkpoint.');
     } finally {
       setIsLoggingIn(false);
     }
-  };
-
-  const handleGateLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await submitWithPasscode(gatePasscode);
-  };
-
-  const handleQuickFill = async () => {
-    const defaultCode = 'gate_staff_secure_2026';
-    setGatePasscode(defaultCode);
-    setLoginError(null);
-    await submitWithPasscode(defaultCode);
-  };
-
-  const handleCopyPasscode = () => {
-    try {
-      navigator.clipboard?.writeText('gate_staff_secure_2026');
-      setCopiedPasscode(true);
-      setTimeout(() => setCopiedPasscode(false), 2000);
-    } catch {}
   };
 
   const handleLogout = async () => {
@@ -713,8 +680,8 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-[100dvh] w-full bg-[#080c14] text-slate-100 flex flex-col items-center justify-start sm:justify-center p-4 sm:p-6 overflow-y-auto pt-6 sm:pt-0">
-        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-5 sm:p-8 shadow-2xl space-y-4 sm:space-y-5 sm:my-auto">
+      <div className="min-h-[100dvh] w-full bg-[#080c14] text-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto">
+        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-5 sm:p-8 shadow-2xl space-y-5 my-auto">
           <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-400/20 text-cyan-300 flex items-center justify-center mx-auto">
             <Lock className="w-6 h-6" />
           </div>
@@ -726,38 +693,6 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
             <p className="text-xs text-slate-400 mt-1">
               Authorized gate staff credentials are required to check passes in at Prince Resort Bunamwaya.
             </p>
-          </div>
-
-          {/* Gate Passcode Quick-Fill Helper for Mobile Keyboards */}
-          <div className="p-3 bg-cyan-500/10 border border-cyan-400/25 rounded-xl text-left space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5 text-[11px]">
-                <Sparkles className="w-3.5 h-3.5" />
-                Gate Staff Passcode
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyPasscode}
-                className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 touch-manipulation py-0.5 px-2 rounded hover:bg-cyan-400/15 active:bg-cyan-400/25 cursor-pointer"
-              >
-                {copiedPasscode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedPasscode ? 'Copied' : 'Copy'}</span>
-              </button>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <code className="text-xs font-mono text-cyan-200 select-all break-all bg-black/60 px-2 py-1 rounded border border-white/10 flex-1">
-                gate_staff_secure_2026
-              </code>
-              <button
-                type="button"
-                onClick={handleQuickFill}
-                disabled={isLoggingIn}
-                className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 text-slate-950 text-xs font-bold rounded-lg shadow-sm whitespace-nowrap cursor-pointer touch-manipulation flex items-center gap-1"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Fill & Sign In</span>
-              </button>
-            </div>
           </div>
 
           {loginError && (
@@ -778,12 +713,6 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
                   onChange={(e) => {
                     setGatePasscode(e.target.value);
                     if (loginError) setLoginError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleGateLogin(e);
-                    }
                   }}
                   placeholder="Enter gate staff passcode"
                   autoCapitalize="none"

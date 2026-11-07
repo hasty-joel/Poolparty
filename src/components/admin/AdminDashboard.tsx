@@ -22,8 +22,7 @@ import {
   AlertCircle,
   MessageCircle,
   Eye,
-  EyeOff,
-  Sparkles
+  EyeOff
 } from 'lucide-react';
 import { TicketService, isOnlineTicketRecord } from '../../lib/ticketService';
 import { TicketRenderer } from '../../lib/ticketRenderer';
@@ -46,7 +45,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [passcode, setPasscode] = useState('');
   const [showPasscode, setShowPasscode] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [copiedPasscode, setCopiedPasscode] = useState(false);
 
   const [stats, setStats] = useState<InventoryDashboardStats | null>(null);
   const [tickets, setTickets] = useState<TicketRecord[]>([]);
@@ -327,19 +325,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [isAuthenticated]);
 
-  const submitWithPasscode = async (rawCode: string) => {
-    const cleaned = (rawCode || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-    if (!cleaned || isAuthenticating) {
-      if (!cleaned) setAuthError('Please enter the organizer admin passcode.');
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passcode.trim() || isAuthenticating) {
+      setAuthError('Please enter the organizer admin passcode.');
       return;
     }
 
-    // Auto-normalize if mobile keyboard auto-capitalized or spaced around the default master passcode
-    const normalized = cleaned.toLowerCase() === 'organizer_admin_master_2026' ? 'organizer_admin_master_2026' : cleaned;
-
     setIsAuthenticating(true);
     setAuthError('');
-    TicketService.setAdminToken(normalized);
+    TicketService.setAdminToken(passcode.trim());
 
     try {
       const health = await TicketService.checkAdminHealth();
@@ -349,8 +344,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (health.authErrorCode === 'ADMIN_AUTH_NOT_CONFIGURED') {
           setAuthError('Admin authentication is not configured on the server.');
         } else if (health.authErrorCode === 'RATE_LIMITED') {
-          const waitTime = health.retryAfterSeconds ? ` Please wait ${health.retryAfterSeconds}s before trying again.` : ' Please wait before trying again.';
-          setAuthError('Too many failed admin authentication attempts.' + waitTime);
+          setAuthError('Too many failed admin authentication attempts. Please wait before trying again.');
         } else {
           setAuthError('Invalid organizer admin passcode.');
         }
@@ -367,26 +361,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } finally {
       setIsAuthenticating(false);
     }
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await submitWithPasscode(passcode);
-  };
-
-  const handleQuickFill = async () => {
-    const masterCode = 'organizer_admin_master_2026';
-    setPasscode(masterCode);
-    setAuthError('');
-    await submitWithPasscode(masterCode);
-  };
-
-  const handleCopyPasscode = () => {
-    try {
-      navigator.clipboard?.writeText('organizer_admin_master_2026');
-      setCopiedPasscode(true);
-      setTimeout(() => setCopiedPasscode(false), 2000);
-    } catch {}
   };
 
   const handleConfirmPayment = async (ticket: TicketRecord) => {
@@ -590,8 +564,8 @@ notify pgrst, 'reload schema';`;
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-[100dvh] w-full bg-[#080c14] flex flex-col items-center justify-start sm:justify-center p-4 sm:p-6 overflow-y-auto pt-6 sm:pt-0">
-        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-5 sm:p-8 shadow-2xl text-center space-y-4 sm:space-y-5 sm:my-auto">
+      <div className="min-h-[100dvh] w-full bg-[#080c14] flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto">
+        <div className="w-full max-w-md bg-[#0d1522] border border-white/10 rounded-xl sm:rounded-2xl p-5 sm:p-8 shadow-2xl text-center space-y-5 sm:space-y-6 my-auto">
           <div className="w-12 h-12 rounded-xl bg-amber-400/10 border border-amber-400/20 text-amber-400 flex items-center justify-center mx-auto">
             <Lock className="w-6 h-6" />
           </div>
@@ -605,40 +579,8 @@ notify pgrst, 'reload schema';`;
             </p>
           </div>
 
-          {/* Organizer Quick-Fill Helper for Touch Keyboards */}
-          <div className="p-3 bg-amber-400/10 border border-amber-400/25 rounded-xl text-left space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-amber-300 uppercase tracking-wider flex items-center gap-1.5 text-[11px]">
-                <Sparkles className="w-3.5 h-3.5" />
-                Organizer Master Passcode
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyPasscode}
-                className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 touch-manipulation py-0.5 px-2 rounded hover:bg-amber-400/15 active:bg-amber-400/25 cursor-pointer"
-              >
-                {copiedPasscode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedPasscode ? 'Copied' : 'Copy'}</span>
-              </button>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <code className="text-xs font-mono text-amber-200 select-all break-all bg-black/60 px-2 py-1 rounded border border-white/10 flex-1">
-                organizer_admin_master_2026
-              </code>
-              <button
-                type="button"
-                onClick={handleQuickFill}
-                disabled={isAuthenticating}
-                className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 active:bg-amber-500 disabled:opacity-50 text-slate-950 text-xs font-bold rounded-lg shadow-sm whitespace-nowrap cursor-pointer touch-manipulation flex items-center gap-1"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Fill & Sign In</span>
-              </button>
-            </div>
-          </div>
-
           {authError && (
-            <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-lg text-xs text-rose-300 text-left">
+            <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-lg text-xs text-rose-300">
               {authError}
             </div>
           )}
@@ -655,12 +597,6 @@ notify pgrst, 'reload schema';`;
                   onChange={(e) => {
                     setPasscode(e.target.value);
                     if (authError) setAuthError('');
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleLogin(e);
-                    }
                   }}
                   placeholder="Enter organizer admin passcode"
                   autoCapitalize="none"
