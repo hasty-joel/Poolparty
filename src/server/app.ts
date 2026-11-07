@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { SupabaseServerService, sanitizeCheckInTicket, normalizeStrictOrderRef } from './supabaseServer.js';
 import { MtnMoMoService } from './mtnMoMoService.js';
+import { RelworxService } from './relworxService.js';
 import { GateSecurity, extractClientIp, safeCompareSecret, sanitizeDiagnosticText, type StaffRole } from './gateSecurity.js';
 import {
   createPendingTicket,
@@ -520,20 +521,152 @@ Sitemap: ${baseUrl}/sitemap.xml
   });
 
   /**
-   * Decommissioned: Relworx payment endpoints (replaced by Option 3: Modern Hybrid Verification).
+   * Relworx Payment Initiation Endpoint
    */
-  const decommissionedGatewayHandler = (_req: express.Request, res: express.Response) => {
-    res.status(410).json({
-      success: false,
-      error: 'GATEWAY_DECOMMISSIONED',
-      message: 'Relworx gateway has been decommissioned. Please use the hybrid Mobile Money flow (/api/payments/mtn-reserve or /api/create-pending-ticket).',
-    });
-  };
+  app.post('/api/payments/relworx-initiate', async (req, res) => {
+    try {
+      const { category, quantity, buyerName, buyerEmail, buyerPhone, network, idempotencyKey } = req.body || {};
+      const result = await SupabaseServerService.initiateRelworxPayment({
+        category,
+        quantity,
+        buyerName,
+        buyerEmail,
+        buyerPhone,
+        network,
+        idempotencyKey,
+      });
 
-  app.post('/api/payments/relworx-initiate', decommissionedGatewayHandler);
-  app.post('/api/payments/flutterwave-initiate', decommissionedGatewayHandler);
-  app.post('/api/payments/relworx-webhook', (_req, res) => {
-    res.status(200).json({ status: 'ignored', message: 'Relworx webhook decommissioned' });
+      if (!result.success) {
+        if (result.code === 'API_DISABLED' || result.error === 'PAYMENT_PROVIDER_UNAVAILABLE' || result.error === 'SUPABASE_NOT_CONFIGURED') {
+          if (result.retryAfterSeconds) {
+            res.setHeader('Retry-After', String(result.retryAfterSeconds));
+          }
+          return res.status(503).json(result);
+        }
+        if (result.error === 'INSUFFICIENT_INVENTORY') {
+          return res.status(409).json(result);
+        }
+        return res.status(400).json(result);
+      }
+
+      return res.status(200).json(result);
+    } catch {
+      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Error initiating payment.' });
+    }
+  });
+
+  /**
+   * Relworx Webhook Endpoint
+   * Fails closed with 503 if RELWORX_WEBHOOK_SECRET is not configured.
+   * Verifies HMAC signature, validates currency (UGX), validates exact order amount,
+   * cross-checks status with Relworx provider API, and atomically updates order.
+   */
+   app.post('/api/payments/relworx-webhook', async (req: any, res) => {
+    try {
+      if (!RelworxService.isWebhookConfigured()) {
+        return res.status(503).json({
+          success: false,
+          error: 'WEBHOOK_NOT_CONFIGURED',
+          message: 'Relworx webhook secret is not configured on the server.',
+        });
+      }
+
+      const sigHeader = (req.headers['relworx-signature'] || req.headers['x-relworx-signature']) as string | undefined;
+      const rawBody = req.rawBody || JSON.stringify(req.body);
+      const isSigValid = RelworxService.verifyWebhookSignature(sigHeader, req.body, rawBody);
+
+      if (!isSigValid) {
+        return res.status(401).json({
+          success: false,
+          error: 'INVALID_SIGNATURE',
+          message: 'Webhook signature verification failed.',
+        });
+      }
+
+      const { status: incomingStatus, customer_reference, reference, amount, currency, internal_reference } = req.body || {};
+      const orderRef = String(customer_reference || reference || '').trim();
+
+      if (!orderRef) {
+        return res.status(400).json({ success: false, error: 'MISSING_ORDER_REF', message: 'Order reference required.' });
+      }
+
+      const orderCheck = await SupabaseServerService.getOrderForPaymentVerification(orderRef);
+      if (!orderCheck.found || !orderCheck.order) {
+        return res.status(404).json({ success: false, error: 'ORDER_NOT_FOUND', message: 'Order not found.' });
+      }
+
+      const order = orderCheck.order;
+
+      // Handle failed/cancelled status
+      if (['failed', 'declined', 'cancelled', 'rejected', 'expired'].includes(String(incomingStatus).toLowerCase())) {
+        const providerCheck = await RelworxService.checkRequestStatus({
+          internalReference: internal_reference || order.relworx_internal_ref,
+          reference: orderRef,
+        });
+
+        if (providerCheck.status !== 'failed') {
+          return res.status(409).json({
+            success: false,
+            error: 'PAYMENT_NOT_CONFIRMED',
+            message: 'Provider has not confirmed payment failure.',
+          });
+        }
+
+        await SupabaseServerService.releaseReservationByOrderRef(orderRef);
+        return res.status(200).json({ status: 'cancelled', message: 'Order cancelled and reservation released.' });
+      }
+
+      // Check currency
+      if (currency && String(currency).toUpperCase() !== 'UGX') {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_CURRENCY',
+          message: 'Webhook currency must be UGX.',
+        });
+      }
+
+      // Check amount
+      const incomingAmount = Number(amount);
+      if (Number.isFinite(incomingAmount) && incomingAmount !== order.total_amount_ugx) {
+        return res.status(400).json({
+          success: false,
+          error: 'AMOUNT_MISMATCH',
+          message: `Webhook amount (${incomingAmount}) does not match order amount (${order.total_amount_ugx}).`,
+        });
+      }
+
+      // Verify status with provider check
+      const providerCheck = await RelworxService.checkRequestStatus({
+        internalReference: internal_reference || order.relworx_internal_ref,
+        reference: orderRef,
+      });
+
+      if (providerCheck.status !== 'success') {
+        return res.status(409).json({
+          success: false,
+          error: 'PAYMENT_NOT_CONFIRMED',
+          message: 'Relworx provider status check did not confirm success.',
+        });
+      }
+
+      if (providerCheck.amount !== undefined && providerCheck.amount !== order.total_amount_ugx) {
+        return res.status(400).json({
+          success: false,
+          error: 'AMOUNT_MISMATCH',
+          message: 'Provider status amount mismatch.',
+        });
+      }
+
+      // Mark order as paid
+      await SupabaseServerService.markOrderAsPaid(orderRef, {
+        providerReference: internal_reference || providerCheck.internal_reference,
+        paymentMethod: 'relworx_mobile_money',
+      });
+
+      return res.status(200).json({ status: 'success', message: 'Payment verified and tickets issued.' });
+    } catch {
+      return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Error processing webhook.' });
+    }
   });
 
   /**
@@ -800,7 +933,7 @@ Sitemap: ${baseUrl}/sitemap.xml
    * - Atomically verifies & sets checked_in_at once
    * - Redacts sensitive fields (qr_token, email, phone, payment refs) for gate_staff role
    */
-  app.post('/api/tickets/verify-checkin', requireGateOrAdminAuth, async (req, res) => {
+  const handleCheckIn = async (req: express.Request, res: express.Response) => {
     try {
       const clientIp = extractClientIp(req);
       const rl = GateSecurity.consumeRateLimit({
@@ -851,7 +984,10 @@ Sitemap: ${baseUrl}/sitemap.xml
       );
       return res.status(500).json({ status: 'INVALID', message: 'Verification error' });
     }
-  });
+  };
+
+  app.post('/api/tickets/verify-checkin', requireGateOrAdminAuth, handleCheckIn);
+  app.post('/api/admin/check-in', requireGateOrAdminAuth, handleCheckIn);
 
   // ============================================================
   // ADMIN API ENDPOINTS (Protected with requireAdminAuth)

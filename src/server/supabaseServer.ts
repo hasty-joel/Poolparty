@@ -213,7 +213,7 @@ export interface PublicLookupTicketSummary {
 
 const UUID_STRICT_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TICKET_NUMBER_STRICT_REGEX = /^(VIP|ORD)-(\d{3,4})$/i;
-export const ORDER_REF_STRICT_REGEX = /^PP-(?:MTN|RWX|MOMO|BOX|FLW)-[A-Z0-9-]{4,64}$/i;
+export const ORDER_REF_STRICT_REGEX = /^(?:PP-(?:MTN|RWX|MOMO|BOX|FLW)-[A-Z0-9-]{4,64}|POOL-[A-Z0-9-]{3,16})$/i;
 const EMAIL_STRICT_REGEX = /^[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,190}\.[A-Z]{2,24}$/i;
 
 export function normalizeStrictOrderRef(raw: string): { valid: boolean; orderRef: string } {
@@ -225,13 +225,13 @@ export function normalizeStrictOrderRef(raw: string): { valid: boolean; orderRef
 }
 
 export const HARDCOPY_RANGES = {
-  ORDINARY: { min: 1, max: 150, prefix: 'ORD', unitPriceUgx: 20000 },
-  VIP: { min: 1, max: 50, prefix: 'VIP', unitPriceUgx: 50000 },
+  ORDINARY: { min: 51, max: 250, prefix: 'ORD', unitPriceUgx: 20000 },
+  VIP: { min: 21, max: 120, prefix: 'VIP', unitPriceUgx: 50000 },
 } as const;
 
 export const ONLINE_RANGES = {
-  ORDINARY: { min: 151, max: 250, prefix: 'ORD', unitPriceUgx: 20000 },
-  VIP: { min: 51, max: 120, prefix: 'VIP', unitPriceUgx: 50000 },
+  ORDINARY: { min: 1, max: 50, prefix: 'ORD', unitPriceUgx: 20000 },
+  VIP: { min: 1, max: 20, prefix: 'VIP', unitPriceUgx: 50000 },
 } as const;
 
 /**
@@ -255,8 +255,8 @@ export function extractVerificationInput(raw: string): string {
 
 /**
  * Determines ticket channel from canonical ticket_number boundaries:
- * - Hardcopy: ORD-001..ORD-150 (150), VIP-001..VIP-050 (50)
- * - Online:   ORD-151..ORD-250 (100), VIP-051..VIP-120 (70)
+ * - Online:   VIP-001..VIP-020 (20), ORD-001..ORD-050 (50)
+ * - Hardcopy: VIP-021..VIP-120 (100), ORD-051..ORD-250 (200)
  */
 export function inferTicketChannelFromNumber(ticketNumber: string): 'online' | 'hardcopy' {
   const match = String(ticketNumber || '').trim().toUpperCase().match(TICKET_NUMBER_STRICT_REGEX);
@@ -264,9 +264,9 @@ export function inferTicketChannelFromNumber(ticketNumber: string): 'online' | '
   const prefix = match[1] as 'VIP' | 'ORD';
   const num = parseInt(match[2], 10);
   if (prefix === 'VIP') {
-    return num <= HARDCOPY_RANGES.VIP.max ? 'hardcopy' : 'online';
+    return num >= HARDCOPY_RANGES.VIP.min ? 'hardcopy' : 'online';
   }
-  return num <= HARDCOPY_RANGES.ORDINARY.max ? 'hardcopy' : 'online';
+  return num >= HARDCOPY_RANGES.ORDINARY.min ? 'hardcopy' : 'online';
 }
 
 /**
@@ -277,6 +277,7 @@ export function isOnlineTicketRow(row: {
   ticket_channel?: string | null;
 }): boolean {
   if (row.ticket_channel === 'hardcopy') return false;
+  if (row.ticket_channel === 'online') return true;
   if (row.ticket_number && inferTicketChannelFromNumber(row.ticket_number) === 'hardcopy') {
     return false;
   }
@@ -401,7 +402,7 @@ export function parseHardcopySelection(params: {
         return {
           valid: false,
           error: 'VALIDATION_ERROR',
-          message: `Invalid ticket number "${String(item).trim()}". Expected ORD-001..ORD-150 or VIP-001..VIP-050.`,
+          message: `Invalid ticket number "${String(item).trim()}". Expected ORD-051..ORD-250 or VIP-021..VIP-120.`,
         };
       }
 
@@ -467,7 +468,7 @@ export function parseHardcopySelection(params: {
       return {
         valid: false,
         error: 'VALIDATION_ERROR',
-        message: 'Invalid ticket number format. Expected ORD-001..ORD-150 or VIP-001..VIP-050.',
+        message: 'Invalid ticket number format. Expected ORD-051..ORD-250 or VIP-021..VIP-120.',
       };
     }
 

@@ -679,7 +679,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                     title="Open phone dialer with MTN USSD code prefilled"
                   >
                     <PhoneCall className="w-4 h-4 fill-current shrink-0" />
-                    <span>Open MTN USSD (*165*3#)</span>
+                    <span>Open MTN USSD ({ussdCode})</span>
                   </a>
 
                   <button
@@ -688,8 +688,16 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                     className="w-full min-h-[46px] py-2.5 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer text-center"
                   >
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>Enter Transaction ID (Optional)</span>
+                    <span>I've Paid · Enter Transaction ID</span>
                   </button>
+                </div>
+
+                {/* Handset Requirement Disclaimer */}
+                <div className="p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-[11px] text-slate-400 flex items-start gap-2.5">
+                  <Smartphone className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong className="text-white">Phone Handset Requirement:</strong> Websites cannot automatically control the USSD session or enter your PIN. You must complete payment prompts on your phone handset.
+                  </p>
                 </div>
 
                 {/* Automated SMS Detection Live Radar Banner */}

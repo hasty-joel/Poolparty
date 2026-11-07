@@ -19,13 +19,14 @@ export function isOnlineTicketRecord(t: {
   ticket_channel?: string | null;
 }): boolean {
   if (t.ticket_channel === 'hardcopy') return false;
+  if (t.ticket_channel === 'online') return true;
   const normalized = String(t.ticket_number || '').trim().toUpperCase();
   const match = normalized.match(/^(VIP|ORD)-(\d{3,4})$/);
   if (match) {
     const prefix = match[1];
     const num = parseInt(match[2], 10);
-    if (prefix === 'VIP' && num <= 50) return false;
-    if (prefix === 'ORD' && num <= 150) return false;
+    if (prefix === 'VIP' && num >= 21) return false;
+    if (prefix === 'ORD' && num >= 51) return false;
   }
   return true;
 }
