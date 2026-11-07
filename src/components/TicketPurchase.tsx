@@ -188,7 +188,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
     else if (cleanedPhone.startsWith('0')) cleanedPhone = cleanedPhone.substring(1);
 
     if (!/^[73][0-9]{8}$/.test(cleanedPhone)) {
-      errs.phone = 'Please provide a valid Uganda MTN Mobile Money phone number (e.g. 0775 198 484).';
+      errs.phone = 'Please provide a valid Uganda MTN or Airtel Mobile Money phone number (e.g. 0775 198 484 or 0755 198 484).';
     }
 
     if (remainingInventory !== null && remainingInventory < quantity) {
@@ -269,7 +269,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
             Select Your Pool Pass
           </h2>
           <p className="text-slate-400 text-xs sm:text-sm mt-2">
-            Choose an Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000) below to unlock MTN Mobile Money checkout.
+            Choose an Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000) below to unlock Mobile Money checkout (MTN MoMo & Airtel Money).
           </p>
 
           <div className="mt-3">
@@ -659,57 +659,45 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
                       <div className="absolute top-0 right-0 w-32 h-32 bg-amber-400/5 rounded-full blur-2xl pointer-events-none" />
 
                       <div className="flex items-start gap-3">
-                        <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-[#FFCC00] text-black font-black flex flex-col items-center justify-center shrink-0 shadow-md">
-                          <span className="text-[11px] sm:text-[12px] leading-tight font-black tracking-tight">MTN</span>
-                          <span className="text-[8.5px] sm:text-[9px] font-bold tracking-tighter uppercase">MoMo</span>
+                        <div className="flex items-center -space-x-1 shrink-0">
+                          <div className="w-9 h-9 rounded-xl bg-[#FFCC00] text-black font-black flex flex-col items-center justify-center shadow-md border border-amber-300 z-10">
+                            <span className="text-[10px] leading-tight font-black tracking-tight">MTN</span>
+                            <span className="text-[7.5px] font-bold tracking-tighter uppercase">MoMo</span>
+                          </div>
+                          <div className="w-9 h-9 rounded-xl bg-[#E60000] text-white font-black flex flex-col items-center justify-center shadow-md border border-rose-400">
+                            <span className="text-[9px] leading-tight font-black tracking-tight">AIR</span>
+                            <span className="text-[7.5px] font-bold tracking-tighter uppercase">TEL</span>
+                          </div>
                         </div>
 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                            <span className="text-xs sm:text-sm font-bold text-white">MTN Mobile Money Merchant Payment</span>
-                            <span className="text-[10px] sm:text-[11px] font-semibold text-amber-300">
-                              · MoMoPay / USSD
+                            <span className="text-xs sm:text-sm font-bold text-white">MTN MoMo & Airtel Money</span>
+                            <span className="text-[10px] sm:text-[11px] font-semibold text-emerald-400">
+                              · Instant SMS Verification
                             </span>
                           </div>
                           <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                            Pay securely using MTN MoMo merchant code and enter your transaction ID to verify your pass.
+                            Pay with your phone via MTN MoMo (*165*3#) or Airtel Money (*185*9#). Your official QR pass activates automatically when your transfer completes!
                           </p>
 
-                          {/* Config Status */}
-                          {mtnConfig && !mtnConfig.configured && (
-                            <div className="mt-2.5 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2">
-                              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                              <div>
-                                <span className="font-semibold block">Merchant Code Not Yet Configured</span>
-                                <span className="text-amber-200/80 text-[11px]">
-                                  Set <code className="font-mono bg-black/40 px-1 py-0.5 rounded text-amber-300">MTN_MERCHANT_CODE</code> in your server environment to display the live merchant code.
-                                </span>
-                              </div>
-                            </div>
-                          )}
-
-                          {mtnConfig?.configured && (
-                            <div className="mt-2.5 p-2.5 rounded-lg bg-[#080c14]/80 border border-white/10 flex flex-wrap items-center justify-between gap-2">
-                              <div className="text-xs">
-                                <span className="text-slate-400 block text-[10px] uppercase font-mono">Merchant Code</span>
-                                <span className="font-mono font-bold text-amber-300 text-sm tracking-wider">
-                                  {mtnConfig.merchantCode}
-                                </span>
-                                {mtnConfig.merchantName && (
-                                  <span className="text-slate-400 text-[11px] block">({mtnConfig.merchantName})</span>
-                                )}
-                              </div>
-                              <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-1 rounded">
-                                Dial *165*3#
+                          <div className="mt-2.5 p-2.5 rounded-lg bg-[#080c14]/80 border border-white/10 flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-xs">
+                              <span className="text-slate-400 block text-[10px] uppercase font-mono">Accepted Networks</span>
+                              <span className="font-mono font-bold text-amber-300 text-xs">
+                                MTN (*165*3#) &bull; Airtel (*185*9#)
                               </span>
                             </div>
-                          )}
+                            <span className="text-[10.5px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded">
+                              Auto-Confirmed
+                            </span>
+                          </div>
                         </div>
                       </div>
 
                       <div className="mt-3.5 pt-3 border-t border-white/10 text-[11px] text-slate-300 flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                        <span>Your pass is held for 15 minutes while you complete payment and submit your transaction ID.</span>
+                        <span>Tickets are reserved for 15 minutes while you authorize payment on your mobile device.</span>
                       </div>
                     </div>
                   </motion.div>
@@ -743,7 +731,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
                         <span>{activeTier.toUpperCase()} Passes Sold Out</span>
                       ) : (
                         <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                          <span>Reserve Passes & Pay with MTN MoMo · UGX {totalPrice.toLocaleString()}</span>
+                          <span>Reserve Passes & Pay with Mobile Money · UGX {totalPrice.toLocaleString()}</span>
                           <ArrowRight className="w-4 h-4 shrink-0" />
                         </div>
                       )}

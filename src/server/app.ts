@@ -1,13 +1,27 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import { SupabaseServerService, sanitizeCheckInTicket, normalizeStrictOrderRef } from './supabaseServer.js';
-import { RelworxService, sanitizeDiagnosticText } from './relworxService.js';
 import { MtnMoMoService } from './mtnMoMoService.js';
-import { GateSecurity, extractClientIp, safeCompareSecret, type StaffRole } from './gateSecurity.js';
+import { GateSecurity, extractClientIp, safeCompareSecret, sanitizeDiagnosticText, type StaffRole } from './gateSecurity.js';
+import {
+  createPendingTicket,
+  getTicketStatus,
+  processIncomingSms,
+} from './smsListenerService.js';
 
 dotenv.config();
 
-const SERVERLESS_ROUTE_PREFIXES = ['/inventory/', '/payments/', '/orders/', '/tickets/', '/admin/', '/gate/'];
+const SERVERLESS_ROUTE_PREFIXES = [
+  '/inventory/',
+  '/payments/',
+  '/orders/',
+  '/tickets/',
+  '/admin/',
+  '/gate/',
+  '/create-pending-ticket',
+  '/ticket-status/',
+  '/sms-listener',
+];
 
 export function createExpressApp() {
   const app = express();
@@ -342,6 +356,91 @@ Sitemap: ${baseUrl}/sitemap.xml
   });
 
   /**
+   * POST /api/create-pending-ticket
+   * Accepts name, email, phone, and amount. Generates unique 4-digit code (POOL-XXXX),
+   * inserts a new row into Supabase with status 'PENDING', and returns { success: true, ticketRef }.
+   */
+  app.post('/api/create-pending-ticket', async (req, res) => {
+    try {
+      const { name, email, phone, amount } = req.body || {};
+      if (!name || !email || !phone || amount === undefined || amount === null) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields: name, email, phone, and amount are mandatory.',
+        });
+      }
+
+      const parsedAmount = parseInt(amount, 10);
+      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Amount must be a positive integer in UGX.',
+        });
+      }
+
+      const result = await createPendingTicket({
+        name: String(name),
+        email: String(email),
+        phone: String(phone),
+        amount: parsedAmount,
+      });
+
+      if (!result.success) {
+        return res.status(500).json(result);
+      }
+
+      return res.status(201).json({
+        success: true,
+        ticketRef: result.ticketRef,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/ticket-status/:ref
+   * Queries Supabase for the given ticket_ref and returns its current status (PENDING or PAID).
+   */
+  app.get('/api/ticket-status/:ref', async (req, res) => {
+    try {
+      const { ref } = req.params;
+      if (!ref) {
+        return res.status(400).json({ success: false, error: 'Ticket reference is required.' });
+      }
+
+      const result = await getTicketStatus(ref);
+      if (!result.success) {
+        return res.status(404).json(result);
+      }
+
+      return res.status(200).json({
+        success: true,
+        ticketRef: result.ticketRef,
+        status: result.status,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  });
+
+  /**
+   * POST /api/sms-listener
+   * Webhook receiver for incoming SMS messages forwarded from Android SMS forwarder app.
+   * Parses MTN MoMo & Airtel Money payment notification texts.
+   * Matches POOL-XXXX reference, updates status to 'PAID', and invokes approveAndSendTicket.
+   */
+  app.post('/api/sms-listener', async (req, res) => {
+    try {
+      const result = await processIncomingSms(req.body || {});
+      const statusCode = result.success ? 200 : (result.matched ? 400 : 200);
+      return res.status(statusCode).json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  });
+
+  /**
    * MTN Mobile Money Pass Reservation:
    * 1. Validates inputs & calculates trusted server price (UGX 20,000 Ordinary, UGX 50,000 VIP)
    * 2. Atomically locks tickets for 15 minutes
@@ -421,316 +520,20 @@ Sitemap: ${baseUrl}/sitemap.xml
   });
 
   /**
-   * Shared payment initiation handler (Relworx Uganda Mobile Money - MTN & Airtel)
-   * 1. Validates inputs & calculates trusted server price (UGX 20,000 Ordinary, UGX 50,000 VIP)
-   * 2. Atomically reserves tickets in Supabase with 10-minute expiry
-   * 3. Triggers Relworx Mobile Money push to customer handset
+   * Decommissioned: Relworx payment endpoints (replaced by Option 3: Modern Hybrid Verification).
    */
-  const handleInitiatePayment = async (req: express.Request, res: express.Response) => {
-    try {
-      const { category, quantity, buyerName, buyerEmail, buyerPhone, network, idempotencyKey } = req.body || {};
-      const headerIdempotencyKey =
-        typeof req.headers['x-idempotency-key'] === 'string' ? req.headers['x-idempotency-key'] : undefined;
-
-      if (!category || quantity === undefined || quantity === null || !buyerName || !buyerEmail || !buyerPhone || !network) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please provide all required fields: full name, email, phone number, pass tier, quantity, and network (MTN or Airtel).',
-          error: 'VALIDATION_ERROR',
-        });
-      }
-
-      if (category !== 'VIP' && category !== 'ORDINARY') {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid ticket category. Must be VIP or ORDINARY.',
-          error: 'VALIDATION_ERROR',
-        });
-      }
-
-      if (network !== 'MTN' && network !== 'AIRTEL') {
-        return res.status(400).json({
-          success: false,
-          message: 'Network must be MTN or AIRTEL.',
-          error: 'VALIDATION_ERROR',
-        });
-      }
-
-      const qty = Number(quantity);
-      if (!Number.isInteger(qty) || qty < 1 || qty > 10) {
-        return res.status(400).json({
-          success: false,
-          message: 'Quantity must be between 1 and 10 tickets.',
-          error: 'VALIDATION_ERROR',
-        });
-      }
-
-      if (typeof buyerName !== 'string' || buyerName.trim().length < 2) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please enter your full name as it will appear on your pass.',
-          error: 'VALIDATION_ERROR',
-        });
-      }
-
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (typeof buyerEmail !== 'string' || !emailRegex.test(buyerEmail.trim())) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please provide a valid email address.',
-          error: 'VALIDATION_ERROR',
-        });
-      }
-
-      const phoneCheck = RelworxService.formatUgandaMsisdn(String(buyerPhone));
-      if (!phoneCheck.valid) {
-        return res.status(400).json({
-          success: false,
-          message: 'Please provide a valid Uganda Mobile Money number (e.g. 0775 198 484 or +256 701 234567).',
-          error: 'VALIDATION_ERROR',
-        });
-      }
-
-      const result = await SupabaseServerService.initiateRelworxPayment({
-        category,
-        quantity: qty,
-        buyerName: buyerName.trim(),
-        buyerEmail: buyerEmail.trim(),
-        buyerPhone: String(buyerPhone).trim(),
-        network,
-        idempotencyKey: typeof idempotencyKey === 'string' ? idempotencyKey : headerIdempotencyKey,
-      });
-
-      if (!result.success) {
-        const errCode = result.error || '';
-        const providerCode = result.code || '';
-
-        if (result.retryAfterSeconds && result.retryAfterSeconds > 0) {
-          res.setHeader('Retry-After', String(result.retryAfterSeconds));
-        }
-
-        if (errCode === 'VALIDATION_ERROR' || errCode === 'INVALID_PHONE_NUMBER') {
-          return res.status(400).json(result);
-        }
-        if (errCode === 'INSUFFICIENT_INVENTORY') {
-          return res.status(409).json(result);
-        }
-        if (errCode === 'RATE_LIMITED' || providerCode === 'RATE_LIMITED') {
-          return res.status(429).json(result);
-        }
-        if (
-          errCode === 'PAYMENT_PROVIDER_UNAVAILABLE' ||
-          providerCode === 'API_DISABLED' ||
-          errCode === 'SUPABASE_NOT_CONFIGURED' ||
-          errCode === 'RELWORX_NOT_CONFIGURED' ||
-          errCode === 'DATABASE_ERROR' ||
-          errCode === 'SCHEMA_MISMATCH'
-        ) {
-          return res.status(503).json(result);
-        }
-        return res.status(502).json(result);
-      }
-
-      return res.status(200).json(result);
-    } catch (err: any) {
-      console.error('[Payment Initiation Route Error]', sanitizeDiagnosticText(err?.message || ''));
-      return res.status(500).json({
-        success: false,
-        message: 'Unexpected server error while initiating payment. Please try again.',
-        error: 'SERVER_ERROR',
-      });
-    }
+  const decommissionedGatewayHandler = (_req: express.Request, res: express.Response) => {
+    res.status(410).json({
+      success: false,
+      error: 'GATEWAY_DECOMMISSIONED',
+      message: 'Relworx gateway has been decommissioned. Please use the hybrid Mobile Money flow (/api/payments/mtn-reserve or /api/create-pending-ticket).',
+    });
   };
 
-  app.post('/api/payments/relworx-initiate', handleInitiatePayment);
-  app.post('/api/payments/flutterwave-initiate', handleInitiatePayment);
-
-  /**
-   * Official Relworx Webhook Listener
-   * - Fails closed when webhook verification secret or Relworx status API is not configured.
-   * - Verifies HMAC-SHA256 signature against raw body + replay window.
-   * - Cross-verifies payment status, currency ('UGX'), and exact order amount against stored order before marking paid.
-   */
-  app.post('/api/payments/relworx-webhook', async (req, res) => {
-    try {
-      if (!RelworxService.isWebhookConfigured()) {
-        console.error('[Relworx Webhook] Rejected webhook: RELWORX_WEBHOOK_SECRET is not configured.');
-        return res.status(503).json({
-          status: 'error',
-          error: 'WEBHOOK_NOT_CONFIGURED',
-          message: 'Webhook verification is not configured on the server.',
-        });
-      }
-
-      const signature = (req.headers['relworx-signature'] ||
-        req.headers['Relworx-Signature'] ||
-        req.headers['signature']) as string | undefined;
-
-      if (!RelworxService.verifyWebhookSignature(signature, req.body, (req as any).rawBody)) {
-        console.warn('[Relworx Webhook] Unauthorized webhook signature attempt rejected.');
-        return res.status(401).json({ status: 'error', error: 'INVALID_SIGNATURE', message: 'Invalid webhook signature' });
-      }
-
-      const body = req.body || {};
-      const rawStatus = String(body.status || body.request_status || body.transaction_status || '').toLowerCase();
-      const rawOrderRef = body.customer_reference || body.reference || body.order_ref;
-      const internalRef = typeof body.internal_reference === 'string' ? body.internal_reference.trim() : undefined;
-      const webhookAmount =
-        body.amount !== undefined && body.amount !== null && String(body.amount).trim() !== ''
-          ? Number(body.amount)
-          : undefined;
-      const webhookCurrency = typeof body.currency === 'string' ? body.currency.trim().toUpperCase() : undefined;
-
-      const refCheck = normalizeStrictOrderRef(String(rawOrderRef || ''));
-      if (!refCheck.valid) {
-        return res.status(400).json({ status: 'error', error: 'INVALID_ORDER_REF', message: 'Missing or invalid order reference' });
-      }
-      const orderRef = refCheck.orderRef;
-
-      if (['success', 'successful', 'completed', 'paid'].includes(rawStatus)) {
-        if (!RelworxService.isConfigured()) {
-          console.error('[Relworx Webhook] Rejected paid transition: Relworx API verification credentials not configured.');
-          return res.status(503).json({
-            status: 'error',
-            error: 'RELWORX_NOT_CONFIGURED',
-            message: 'Payment provider status verification is not configured on the server.',
-          });
-        }
-
-        if (webhookCurrency && webhookCurrency !== 'UGX') {
-          return res.status(400).json({ status: 'error', error: 'INVALID_CURRENCY', message: 'Invalid currency; expected UGX' });
-        }
-
-        const storedOrder = await SupabaseServerService.getOrderForPaymentVerification(orderRef);
-        if (storedOrder.error === 'SUPABASE_NOT_CONFIGURED' || storedOrder.error === 'DATABASE_ERROR') {
-          return res.status(503).json({
-            status: 'error',
-            error: storedOrder.error,
-            message: 'Unable to load stored order for webhook verification.',
-          });
-        }
-        if (!storedOrder.found || !storedOrder.order) {
-          return res.status(404).json({
-            status: 'error',
-            error: 'ORDER_NOT_FOUND',
-            message: 'Order reference was not found.',
-          });
-        }
-
-        const order = storedOrder.order;
-        const expectedAmountUgx = Math.round(Number(order.total_amount_ugx));
-
-        if (webhookAmount !== undefined && (!Number.isFinite(webhookAmount) || Math.round(webhookAmount) !== expectedAmountUgx)) {
-          return res.status(400).json({
-            status: 'error',
-            error: 'AMOUNT_MISMATCH',
-            message: 'Webhook payment amount does not match the stored order total.',
-          });
-        }
-
-        const verification = await RelworxService.checkRequestStatus({
-          internalReference: internalRef || order.relworx_internal_ref || undefined,
-          reference: order.order_ref,
-        });
-
-        if (!verification.success || verification.status !== 'success') {
-          console.warn(
-            `[Relworx Webhook] Provider status check did not confirm success: status=${verification.status}`
-          );
-          return res.status(409).json({
-            status: 'unverified',
-            error: 'PAYMENT_NOT_CONFIRMED',
-            message: 'Provider status verification did not confirm successful payment.',
-          });
-        }
-
-        const verifiedCurrency = verification.currency ? String(verification.currency).toUpperCase() : 'UGX';
-        if (verifiedCurrency !== 'UGX') {
-          return res.status(400).json({ status: 'error', error: 'INVALID_CURRENCY', message: 'Invalid currency' });
-        }
-
-        if (
-          verification.amount === undefined ||
-          verification.amount === null ||
-          !Number.isFinite(Number(verification.amount)) ||
-          Math.round(Number(verification.amount)) !== expectedAmountUgx
-        ) {
-          return res.status(400).json({
-            status: 'error',
-            error: 'AMOUNT_MISMATCH',
-            message: 'Verified provider amount does not match stored order total.',
-          });
-        }
-
-        if (verification.reference && verification.reference.trim().toUpperCase() !== order.order_ref) {
-          return res.status(400).json({
-            status: 'error',
-            error: 'ORDER_REF_MISMATCH',
-            message: 'Verified provider reference does not match order reference.',
-          });
-        }
-
-        const marked = await SupabaseServerService.markOrderAsPaid(order.order_ref, {
-          relworx: verification,
-          relworx_internal_ref: verification.internal_reference || internalRef || order.relworx_internal_ref,
-          amount: expectedAmountUgx,
-          currency: 'UGX',
-        });
-
-        if (!marked) {
-          return res.status(503).json({
-            status: 'error',
-            error: 'DATABASE_ERROR',
-            message: 'Could not persist verified payment state.',
-          });
-        }
-
-        return res.status(200).json({ status: 'success', message: 'Order payment verified and tickets issued' });
-      }
-
-      if (['failed', 'declined', 'cancelled', 'expired', 'rejected'].includes(rawStatus)) {
-        if (!RelworxService.isConfigured()) {
-          return res.status(503).json({
-            status: 'error',
-            error: 'RELWORX_NOT_CONFIGURED',
-            message: 'Payment provider status verification is not configured on the server.',
-          });
-        }
-
-        const storedOrder = await SupabaseServerService.getOrderForPaymentVerification(orderRef);
-        if (!storedOrder.found || !storedOrder.order) {
-          return res.status(404).json({ status: 'error', error: 'ORDER_NOT_FOUND', message: 'Order reference not found' });
-        }
-
-        if (storedOrder.order.status === 'paid') {
-          return res.status(200).json({ status: 'ignored', message: 'Order is already confirmed paid' });
-        }
-
-        const verification = await RelworxService.checkRequestStatus({
-          internalReference: internalRef || storedOrder.order.relworx_internal_ref || undefined,
-          reference: storedOrder.order.order_ref,
-        });
-
-        if (verification.status !== 'failed') {
-          return res.status(409).json({
-            status: 'unverified',
-            error: 'FAILURE_NOT_CONFIRMED',
-            message: 'Provider did not confirm failed payment status.',
-          });
-        }
-
-        await SupabaseServerService.releaseReservationByOrderRef(orderRef, 'failed');
-        return res.status(200).json({ status: 'success', message: 'Order marked failed and inventory released' });
-      }
-
-      res.status(200).json({ status: 'ignored' });
-    } catch (err: any) {
-      console.error(
-        '[Relworx Webhook Error]',
-        GateSecurity.redactServerSecrets(sanitizeDiagnosticText(err?.message || ''))
-      );
-      res.status(500).json({ status: 'error', message: 'Webhook processing error' });
-    }
+  app.post('/api/payments/relworx-initiate', decommissionedGatewayHandler);
+  app.post('/api/payments/flutterwave-initiate', decommissionedGatewayHandler);
+  app.post('/api/payments/relworx-webhook', (_req, res) => {
+    res.status(200).json({ status: 'ignored', message: 'Relworx webhook decommissioned' });
   });
 
   /**
@@ -1072,10 +875,7 @@ Sitemap: ${baseUrl}/sitemap.xml
       mtnMerchantConfigured: MtnMoMoService.isConfigured(),
       mtnMerchantCode: MtnMoMoService.isConfigured() ? 'Configured' : 'Missing (MTN_MERCHANT_CODE pending in .env)',
       mtnMerchantName: MtnMoMoService.getMerchantName(),
-      relworxConfigured: RelworxService.isConfigured(),
-      relworxWebhookConfigured: RelworxService.isWebhookConfigured(),
-      relworxStatus: RelworxService.getProviderHealthStatus(),
-      relworxAccount: RelworxService.getAccountNo() ? 'Configured' : 'Missing',
+      smsForwarderActive: true,
       error: health.error,
     });
   });
@@ -1156,29 +956,6 @@ Sitemap: ${baseUrl}/sitemap.xml
 
   app.post('/api/admin/mtn-reject', requireAdminAuth, handleMtnReject);
   app.post('/api/admin/reject-mtn-payment', requireAdminAuth, handleMtnReject);
-
-  app.post('/api/admin/verify-relworx-transaction', requireAdminAuth, async (req, res) => {
-    try {
-      const { orderRef } = req.body || {};
-      if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef required' });
-
-      const result = await SupabaseServerService.verifyRelworxOrderDirectly(orderRef);
-      res.json(result);
-    } catch {
-      res.status(500).json({ success: false, message: 'Error verifying transaction.' });
-    }
-  });
-
-  app.post('/api/admin/verify-flw-transaction', requireAdminAuth, async (req, res) => {
-    try {
-      const { orderRef } = req.body || {};
-      if (!orderRef) return res.status(400).json({ success: false, message: 'orderRef required' });
-      const result = await SupabaseServerService.verifyRelworxOrderDirectly(orderRef);
-      res.json(result);
-    } catch {
-      res.status(500).json({ success: false, message: 'Error verifying transaction.' });
-    }
-  });
 
   app.post('/api/admin/physical-sale', requireAdminAuth, async (req, res) => {
     try {

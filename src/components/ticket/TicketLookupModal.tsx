@@ -76,19 +76,19 @@ export const TicketLookupModal: React.FC<TicketLookupModalProps> = ({
         {/* Content */}
         <div className="p-4 sm:p-6 space-y-4 overflow-y-auto max-h-[calc(94vh-65px)]">
           <p className="text-xs text-slate-400 leading-relaxed">
-            Enter your checkout phone number (e.g. <span className="font-mono text-slate-300">0775 198 484</span>) or exact order reference (e.g. <span className="font-mono text-slate-300">PP-MTN-...</span> or <span className="font-mono text-slate-300">PP-RWX-...</span>), plus your checkout email address to verify ownership.
+            Enter your checkout phone number (e.g. <span className="font-mono text-slate-300">0775 198 484</span>) or exact ticket/order reference (e.g. <span className="font-mono text-slate-300">POOL-4921</span>), plus your checkout email address to verify ownership.
           </p>
 
           <form onSubmit={handleSearch} className="space-y-3">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Phone Number or Exact Order Reference
+                Phone Number or Ticket Reference
               </label>
               <input
                 type="text"
                 value={contact}
                 onChange={(e) => setContact(e.target.value)}
-                placeholder="e.g. 0775 198 484 or PP-MTN-..."
+                placeholder="e.g. 0775 198 484 or POOL-4921"
                 className="w-full px-3.5 py-3 bg-[#080c14] border border-white/15 rounded-lg text-white text-base sm:text-sm min-h-[46px] focus:border-amber-400 focus:outline-none transition-colors font-mono"
                 required
               />

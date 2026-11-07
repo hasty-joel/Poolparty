@@ -27,11 +27,7 @@ export interface OrderRecord {
   verified_by?: string | null;
   rejection_reason?: string | null;
   submission_notes?: string | null;
-  relworx_internal_ref?: string | null;
-  flw_transaction_id?: string | null;
-  flw_ref?: string | null;
-  auth_url?: string | null;
-  gateway?: 'mtn_momo' | 'relworx' | 'flutterwave';
+  gateway?: 'hybrid_momo' | 'mtn_momo';
   reserved_until: string;
   created_at: string;
   paid_at?: string | null;
@@ -52,10 +48,9 @@ export interface InitiatePaymentResponse {
   orderRef?: string;
   message: string;
   authUrl?: string | null;
-  relworxInternalRef?: string | null;
   merchantCode?: string;
   merchantName?: string;
-  gateway?: 'mtn_momo' | 'relworx' | 'flutterwave';
+  gateway?: 'hybrid_momo' | 'mtn_momo';
   reservedUntil?: string;
   totalAmountUgx?: number;
   tickets?: TicketRecord[];

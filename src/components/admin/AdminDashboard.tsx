@@ -163,23 +163,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleVerifyRelworxOrder = async (orderRef: string) => {
-    setVerifyingOrderRef(orderRef);
-    setActionError(null);
-    try {
-      const res = await TicketService.verifyRelworxTransactionAdmin(orderRef);
-      if (res.success) {
-        setActionSuccess(`Relworx verified: Order ${orderRef} is confirmed & paid!`);
-        await loadData();
-      } else {
-        setActionError(res.message || 'Relworx payment not confirmed yet.');
-      }
-    } catch (err: any) {
-      setActionError('Error verifying with Relworx: ' + err?.message);
-    } finally {
-      setVerifyingOrderRef(null);
-    }
-  };
+
 
   const handleOpenVerifyModal = (ord: any) => {
     setVerifyModalOrder(ord);
@@ -454,7 +438,8 @@ create table if not exists public.tickets (
   checked_in_at timestamptz,
   order_ref text,
   reserved_until timestamptz,
-  relworx_internal_ref text,
+  mtn_transaction_id text,
+  ticket_ref text,
   constraint ticket_number_category_check check (
     (category = 'VIP' and ticket_number like 'VIP-%')
     or
@@ -462,16 +447,17 @@ create table if not exists public.tickets (
   )
 );
 
--- Non-destructively add reservation, Relworx & MTN MoMo columns
+-- Non-destructively add reservation & Mobile Money columns
 alter table public.tickets
   add column if not exists order_ref text,
   add column if not exists reserved_until timestamptz,
-  add column if not exists relworx_internal_ref text,
+  add column if not exists ticket_ref text,
   add column if not exists mtn_transaction_id text;
 
 create index if not exists idx_tickets_order_ref on public.tickets(order_ref);
 create index if not exists idx_tickets_reserved_until on public.tickets(reserved_until);
 create index if not exists idx_tickets_mtn_tx on public.tickets(mtn_transaction_id);
+create index if not exists idx_tickets_ticket_ref on public.tickets(ticket_ref);
 
 -- Create public.orders table if missing
 create table if not exists public.orders (
@@ -483,14 +469,13 @@ create table if not exists public.orders (
   total_amount_ugx integer not null check (total_amount_ugx > 0),
   status text not null default 'pending'
     check (status in ('pending', 'paid', 'failed', 'cancelled', 'expired')),
-  payment_method text not null default 'relworx_mobile_money',
+  payment_method text not null default 'hybrid_mobile_money',
   network text check (network in ('MTN', 'AIRTEL')),
   buyer_name text not null,
   buyer_email text not null,
   buyer_phone text not null,
-  relworx_internal_ref text,
-  gateway text not null default 'relworx',
-  reserved_until timestamptz not null default (now() + interval '10 minutes'),
+  gateway text not null default 'hybrid_momo',
+  reserved_until timestamptz not null default (now() + interval '15 minutes'),
   created_at timestamptz not null default now(),
   paid_at timestamptz
 );
@@ -1912,9 +1897,9 @@ notify pgrst, 'reload schema';`;
                         <tr key={ord.id} className="hover:bg-white/[0.02]">
                           <td className="py-3 px-3 font-mono font-bold text-cyan-300">
                             {ord.order_ref}
-                            {(ord.relworx_internal_ref || ord.flw_ref) && (
+                            {ord.mtn_transaction_id && (
                               <span className="block text-[10px] font-normal text-slate-500 font-mono">
-                                Relworx: {ord.relworx_internal_ref || ord.flw_ref}
+                                MoMo ID: {ord.mtn_transaction_id}
                               </span>
                             )}
                           </td>
@@ -1981,17 +1966,7 @@ notify pgrst, 'reload schema';`;
                                 </>
                               )}
 
-                              {isPending && (ord.gateway === 'relworx' || ord.payment_method === 'relworx_mobile_money') && (
-                                <button
-                                  onClick={() => handleVerifyRelworxOrder(ord.order_ref)}
-                                  disabled={verifyingOrderRef === ord.order_ref}
-                                  className="px-2.5 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-200 text-[11px] font-bold rounded-lg cursor-pointer flex items-center gap-1"
-                                  title="Check status with Relworx API"
-                                >
-                                  <RefreshCw className={`w-3 h-3 ${verifyingOrderRef === ord.order_ref ? 'animate-spin' : ''}`} />
-                                  <span>Verify Relworx</span>
-                                </button>
-                              )}
+
 
                               {isPaid && (
                                 <>

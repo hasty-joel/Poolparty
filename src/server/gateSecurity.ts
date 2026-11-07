@@ -486,3 +486,20 @@ export const GateSecurity = {
     _rateLimitBuckets.clear();
   },
 };
+
+export const CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE =
+  'Mobile Money payments are temporarily unavailable right now. You have not been charged, and your selected passes remain available. Please try again later.';
+
+/**
+ * Redact phone numbers, emails, account IDs, and bearer/API tokens before server logging
+ */
+export function sanitizeDiagnosticText(input: unknown): string {
+  const raw = typeof input === 'string' ? input : '';
+  if (!raw) return '';
+  return raw
+    .replace(/(?:\+?256|0)[37][0-9]{8}/g, '[REDACTED_PHONE]')
+    .replace(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/g, '[REDACTED_EMAIL]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+    .replace(/ppgs1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, 'ppgs1.[REDACTED]');
+}
+

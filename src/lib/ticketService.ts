@@ -211,8 +211,7 @@ export const TicketService = {
     table: string;
     totalRecordsFound: number;
     adminAuthConfigured?: boolean;
-    relworxConfigured?: boolean;
-    relworxAccount?: string;
+    smsForwarderActive?: boolean;
     authErrorCode?: string;
     retryAfterSeconds?: number;
     error?: string;
@@ -228,7 +227,7 @@ export const TicketService = {
       project: 'Poolparty',
       table: 'public.tickets',
       totalRecordsFound: 0,
-      relworxConfigured: false,
+      smsForwarderActive: true,
       authErrorCode:
         res.status === 401 || res.status === 403
           ? 'UNAUTHORIZED'
@@ -605,79 +604,34 @@ export const TicketService = {
   },
 
   /**
-   * Initiate Relworx Uganda Mobile Money Checkout (MTN MoMo & Airtel Money)
-   * Official Relworx API: https://payments.relworx.com/docs
+   * Option 3: Modern Hybrid Verification Methods
    */
-  async initiateRelworxPayment(payload: {
-    category: TicketCategory;
-    quantity: number;
-    buyerName: string;
-    buyerEmail: string;
-    buyerPhone: string;
-    network: 'MTN' | 'AIRTEL';
-    idempotencyKey?: string;
-  }): Promise<{
-    success: boolean;
-    orderRef?: string;
-    message: string;
-    relworxInternalRef?: string | null;
-    reservedUntil?: string;
-    totalAmountUgx?: number;
-    tickets?: TicketRecord[];
-    error?: string;
-    code?: string;
-    retryable?: boolean;
-    retryAfterSeconds?: number;
-    reusedExistingOrder?: boolean;
-    httpStatus?: number;
-  }> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (payload.idempotencyKey) {
-      headers['X-Idempotency-Key'] = payload.idempotencyKey;
-    }
-
-    // Single request per user submission — never automatically retries a disabled provider API
-    const res = await fetchSafeJson<any>(
-      '/api/payments/relworx-initiate',
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      },
-      PAYMENT_API_TIMEOUT_MS
-    );
-
-    if (res.data && typeof res.data.success === 'boolean') {
-      return {
-        ...res.data,
-        httpStatus: res.status,
-        message: res.data.message || res.data.error || res.fallbackMessage,
-      };
-    }
-
-    return {
-      success: false,
-      httpStatus: res.status,
-      message: res.fallbackMessage,
-      error: res.status === 408 || res.status === 0 ? 'NETWORK_UNCERTAIN' : 'API_ERROR',
-      retryable: true,
-    };
+  async createPendingTicket(payload: {
+    name: string;
+    email: string;
+    phone: string;
+    amount: number;
+  }): Promise<{ success: boolean; ticketRef?: string; error?: string }> {
+    const res = await fetchSafeJson<any>('/api/create-pending-ticket', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return res.data || { success: false, error: res.fallbackMessage };
   },
 
-  /**
-   * Backwards-compatible wrapper pointing to Relworx
-   */
-  async initiateFlutterwavePayment(payload: {
-    category: TicketCategory;
-    quantity: number;
-    buyerName: string;
-    buyerEmail: string;
-    buyerPhone: string;
-    network: 'MTN' | 'AIRTEL';
-  }) {
-    return this.initiateRelworxPayment(payload);
+  async getTicketStatus(ticketRef: string): Promise<{ success: boolean; ticketRef?: string; status?: string; error?: string }> {
+    const res = await fetchSafeJson<any>(`/api/ticket-status/${encodeURIComponent(ticketRef)}`);
+    return res.data || { success: false, error: res.fallbackMessage };
+  },
+
+  async submitSmsForwarder(payload: { from?: string; text: string; timestamp?: string }): Promise<{ success: boolean; matched: boolean; ticketRef?: string; message?: string }> {
+    const res = await fetchSafeJson<any>('/api/sms-listener', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return res.data || { success: false, matched: false, message: res.fallbackMessage };
   },
 
   /**
@@ -934,28 +888,7 @@ export const TicketService = {
     };
   },
 
-  /**
-   * Admin verify Relworx transaction (Protected)
-   */
-  async verifyRelworxTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
-    const res = await fetchSafeJson<any>(
-      '/api/admin/verify-relworx-transaction',
-      {
-        method: 'POST',
-        headers: this.getAdminHeaders(),
-        body: JSON.stringify({ orderRef }),
-      },
-      PAYMENT_API_TIMEOUT_MS
-    );
-    if (res.data && typeof res.data.success === 'boolean') {
-      return res.data;
-    }
-    return { success: false, message: res.fallbackMessage };
-  },
 
-  async verifyFlwTransactionAdmin(orderRef: string): Promise<{ success: boolean; message: string }> {
-    return this.verifyRelworxTransactionAdmin(orderRef);
-  },
 
   /**
    * Atomic Gate Check-in (Calls secure server endpoint with signed gate staff session credentials)
