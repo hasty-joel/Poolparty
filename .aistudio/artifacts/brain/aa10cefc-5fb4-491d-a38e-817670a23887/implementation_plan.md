@@ -1,90 +1,124 @@
-# Scattered Contextual Imagery Across Pool Party Website
+# MTN MoMoPay Validity Approval & End-to-End Verification Guide
 
-Scatter authentic, high-fidelity poolside and venue photography organically across the existing sections of the Pool Party website—enhancing the Hero, Lineup, Ticket Tiers, and Venue sections without a standalone gallery.
+Comprehensive breakdown of how MTN MoMo merchant code payments are validated in the Pool Party ticketing system, covering automated real-time SMS matching, the manual Admin MoMo Desk approval flow, and an interactive end-to-end verification test procedure.
 
-### User Review & Critical Decisions
+---
+
+## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Revised per your feedback: **No dedicated or standalone gallery**. Instead, curated photography is embedded directly into the flow of existing components so visitors naturally experience the venue, vibes, and VIP perks as they scroll.
+> The application uses a secure dual-track validation architecture. Payments are never approved automatically based on customer input alone.
 
-- **Revised Layout Strategy**: Instead of clustering photos into a single gallery or grid, images are scattered across four key existing sections:
-  1. **Lineup & Vibe Cards**: Embedding photography directly into the Trevor DJ and Sunset Headline stage cards.
-  2. **Ticket Category Tier Cards (Ordinary vs. VIP)**: Adding vivid tier-specific imagery directly inside the Ordinary Pass (poolside daybeds) and VIP Pass (twilight cabana lounge & bottle service) checkout cards.
-  3. **Venue & RSVP Location Block**: Embedding the Prince Resort Bunamwaya architectural pool deck photo alongside the Google Maps and contact panel.
-  4. **Lifestyle Accent Spots**: Adding natural photo accents for poolside cocktails/grill and daytime water lounging within the existing flow.
-- **Visual Aesthetic**: Vibrant tropical day-to-night poolside party aesthetic with authentic Ugandan resort lighting, clear waters, and warm twilight tones.
-- **Preservation Principle**: No disruptive full-page overlays, no heavy carousels, and no disruption to the existing Supabase live inventory or MTN Mobile Money payment flows.
+- **Track 1 (Automated Instant Verification)**: Triggered when an Android SMS forwarder or telecom gateway posts an incoming MTN MoMo notification to `/api/sms-listener`. The server parses the SMS, validates the exact amount and matching `POOL-XXXX` reference, transitions the order to `paid`, and issues cryptographically signed QR tickets.
+- **Track 2 (Admin Manual Desk Verification)**: Triggered when an administrator logs into the Admin Dashboard (`ADMIN_PASSCODE = adminpoolparty`), inspects the `MTN MoMo Desk` tab, verifies the transaction ID against the official merchant SIM/portal, and clicks **Verify & Issue Ticket**.
 
 ---
 
-### 1. Overview & Core Concept
+## 1. Overview & Core Concept
 
-- **What It Does**: Distributes high-resolution, thematic photography across the existing website sections so that imagery supports the copy and value proposition at every touchpoint.
-- **Target Audience / Persona**: Attendees, party groups, and VIP guests exploring the event details, lineup, ticket options, and location.
-- **Key Value**: Provides effortless visual context throughout the browsing journey. Visitors immediately see the stage setup when reading about Trevor DJ, see the VIP cabana experience when choosing their ticket tier, and see the resort grounds when looking up the venue.
-
----
-
-### 2. User Experience & Visual Placement
-
-#### Scattered Image Touchpoints
-1. **Lineup & Stage Section (`LineupAndVibe.tsx`)**:
-   - **Host & Stage Card**: Feature image of the poolside DJ booth and high-energy acoustic sound rig integrated into the Trevor DJ card.
-   - **Sunset Headline Card**: Atmospheric twilight poolside silhouette photo illustrating the sun setting over Bunamwaya for the Surprise Artist announcement.
-2. **Ticket Purchase Tiers (`TicketPurchase.tsx`)**:
-   - **Ordinary Pass Card (UGX 20,000)**: Embedded photo showing the sun-drenched turquoise resort pool and day loungers.
-   - **VIP Pass Card (UGX 50,000)**: Embedded luxury photo showcasing private covered cabanas, twilight lighting, and dedicated bottle service attendants.
-3. **Venue & Location Block (`VenueAndRsvp.tsx`)**:
-   - **Resort Grounds Photo**: High-resolution wide photograph of Prince Resort Bunamwaya's pool deck and palm gardens embedded right above the Google Maps action button.
-4. **Poolside Hospitality Accents**:
-   - Subtle, crisp photo pairings for tropical cocktails / grill bites and poolside relaxation woven into the event details without disturbing the clean layout.
-
-#### Visual Styling & Layout Discipline
-- **Aspect Ratio & Containment**: Clean `16:9` and `4:3` cropped imagery with smooth rounded corners (`rounded-xl`), subtle hairline borders (`border border-white/10`), and gentle dark gradient scrims (`bg-gradient-to-t from-[#080c14] via-transparent to-transparent`) ensuring all typography remains 100% legible.
-- **Anti-Slop Cleanliness**:
-  - No decorative floating sticker frames, no generic sparkle overlays, and no broken external image links.
-  - Zero pill-badge sandwiches on image headers.
-  - Full responsive optimization for small mobile screens (320px–375px) up to 1440px desktop displays.
-
----
-
-### 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Section-Integrated Photography vs. Dedicated Gallery Section**
-  - *Chosen Approach*: Scatter photos directly into the sections where decisions happen (Lineup, Tickets, Venue).
-  - *Why*: Eliminates user fatigue from scrolling through an isolated gallery block. Placing images directly next to ticket options and venue directions directly reinforces the purchase decision.
-  - *Alternatives Considered*: The standalone Bento gallery was removed per your explicit instruction.
-
-- **Decision 2: Lightweight Asset Integration**
-  - *Chosen Approach*: Leverage existing verified assets in `src/assets/images/` with optimized responsive loading (`loading="lazy"`, `referrerPolicy="no-referrer"`).
-  - *Why*: Instant page load with zero network latency, zero external CDN dependencies, and guaranteed stability on Vercel.
-
----
-
-### 4. Technical Architecture & Component Mapping
+When a buyer completes checkout on the website, they are assigned a unique reservation reference (e.g. `POOL-4821`) and instructed to dial `*165*3#` to pay the merchant code (`672190`). Because USSD payments happen externally on the customer's phone, validity is confirmed via one of two authoritative mechanisms:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                           App.tsx                               │
-│                                                                 │
-│  ├── Hero.tsx                                                   │
-│  │   └── Ambient resort pool backdrop with subtle dark scrim    │
-│  │                                                              │
-│  ├── LineupAndVibe.tsx (UPDATED)                                │
-│  │   ├── Trevor DJ Host Card ──► [Poolside Sound Deck Photo]    │
-│  │   └── Surprise Artist Card ─► [Twilight Sunset Vibe Photo]   │
-│  │                                                              │
-│  ├── TicketPurchase.tsx (UPDATED)                               │
-│  │   ├── Ordinary 20K Tier Card ──► [Daybed & Pool Water Photo] │
-│  │   └── VIP 50K Tier Card ───────► [VIP Cabana & Lounge Photo] │
-│  │                                                              │
-│  └── VenueAndRsvp.tsx (UPDATED)                                 │
-│      └── Prince Resort Bunamwaya ──► [Resort Grounds Photo]     │
-└─────────────────────────────────────────────────────────────────┘
+                  ┌──────────────────────────────────────────────┐
+                  │ Customer Pays via MTN USSD (*165*3#)         │
+                  │ Enters Merchant Code 672190 + Ref POOL-XXXX  │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    ▼                                         ▼
+      ┌───────────────────────────┐             ┌───────────────────────────┐
+      │  Track 1: Automated SMS   │             │   Track 2: Admin Desk     │
+      │  Incoming MTN SMS Webhook │             │  Customer submits Tx ID   │
+      │  matches POOL-XXXX + UGX  │             │  Admin audits MoMo portal │
+      └─────────────┬─────────────┘             └─────────────┬─────────────┘
+                    │                                         │
+                    ▼                                         ▼
+      ┌─────────────────────────────────────────────────────────────────────┐
+      │  Secure Supabase Server Transition to PAID                          │
+      │  - Validates stock inventory                                        │
+      │  - Generates unique QR tokens & Canva-ready ticket assets           │
+      │  - Unlocks Instant WhatsApp Delivery Button                         │
+      │  - Enables Entrance Gate QR Scanner Validation                      │
+      └─────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Files to Update During Execution
-1. `src/components/LineupAndVibe.tsx`: Embed stage & twilight sunset imagery into the host and headline cards.
-2. `src/components/TicketPurchase.tsx`: Add tier-specific visual cards illustrating Ordinary vs. VIP experiences.
-3. `src/components/VenueAndRsvp.tsx`: Embed the Prince Resort pool deck photo above the location & directions button.
-4. `test/supabase-ticketing.test.ts`: Verify test suite and build stability.
+---
+
+## 2. User Experience & Verification Flows
+
+### Flow A: Automated SMS Match (Customer Perspective)
+1. Customer selects ticket tier (VIP @ UGX 50,000 or Ordinary @ UGX 20,000).
+2. Customer is shown the **MTN MoMoPay Checkout** modal with Merchant Code `672190` and reference `POOL-XXXX`.
+3. Customer dials `*165*3#` on their handset and puts `POOL-XXXX` in the reason field.
+4. The merchant phone receives: *"You have received UGX 50,000 from 25677... Ref: POOL-XXXX. Balance: UGX... TxId: 1984729184"*.
+5. The SMS is posted to `/api/sms-listener`.
+6. The customer's checkout modal automatically updates to **Payment Verified · Tickets Issued** without refreshing, displaying their QR code and **Send Ticket on WhatsApp** button.
+
+### Flow B: Admin Manual Verification Desk (Administrator Perspective)
+1. Customer pays but enters their Transaction ID manually into Step 2 of the checkout modal.
+2. The order appears in the **Admin Dashboard** (`/admin` with passcode `256256`) under the **MTN MoMo Desk** tab.
+3. The Admin views:
+   - Customer Full Name, Email, and Phone Number
+   - Pass Tier (VIP or Ordinary) & Quantity
+   - Total UGX Amount Due
+   - Customer-Submitted MTN Transaction ID & Order Reference
+4. The Admin opens their physical MTN Merchant phone or MTN MoMo business portal, searches the transaction ID, and confirms the funds have arrived.
+5. The Admin clicks **Verify & Issue Ticket**:
+   - A modal prompt confirms: *"Have you independently verified transaction in your official MTN Merchant account?"*
+   - Once confirmed, the system activates the ticket QR code in the database and prevents duplicate verification.
+   - The Admin can click **Send Ticket on WhatsApp** to dispatch the ticket directly to the customer.
+6. If the transaction ID is fraudulent or unreceived, the Admin clicks **Reject Payment**, inputs a rejection reason, and the reserved tickets are immediately returned to available inventory.
+
+---
+
+## 3. Step-by-Step Walk-Through Test Guide
+
+To test the entire approval and verification process right now in the app:
+
+### Step 1: Place a Test Order as a Customer
+1. Scroll to the **Select Your Pool Pass** section on the homepage.
+2. Select **1x Ordinary Pass (UGX 20,000)** or **VIP Pass (UGX 50,000)**.
+3. Fill in the form:
+   - Full Name: `Joel Test`
+   - Email: `joel@example.com`
+   - Phone: `0775198484`
+4. Click **Continue to MTN MoMoPay Checkout**.
+5. Note the generated Order Reference (e.g., `POOL-XXXX`).
+6. In the modal, scroll to **Step 2 (Optional)**, enter a simulated MTN Transaction ID (e.g. `1029384756`), and click **Submit Transaction ID**.
+7. The modal transitions to **Payment Submitted · Under Admin Verification**.
+
+### Step 2: Open the Admin MoMo Desk
+1. Click the **Admin** shield icon in the top navigation or navigate to `/admin`.
+2. Enter the Admin Passcode: `adminpoolparty`.
+3. Select the **MTN MoMo Desk** tab.
+4. Your pending test order will be prominently displayed with the customer details, amount, order reference, and transaction ID.
+
+### Step 3: Approve & Issue Ticket
+1. Click the glowing green **Verify & Issue Ticket** button on the order card.
+2. In the confirmation dialog, click **Confirm & Activate Ticket**.
+3. The order status updates instantly to `PAID`, issuing the QR code.
+4. A **Send Ticket on WhatsApp** button appears immediately on the card, formatted with international code `256` and the customer's phone number.
+
+### Step 4: Validate at Gate Check-In
+1. Navigate to the **Gate Check-In** scanner tab in the Admin Dashboard.
+2. Enter the ticket token or scan the issued QR code.
+3. The gate system confirms valid entry, displays attendee details, and marks the pass as `USED` to prevent reuse.
+
+---
+
+## 4. Technical Architecture & Endpoints
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        BACKEND VERIFICATION API                       │
+├──────────────────────────────┬─────────────────────────────────────────┤
+│ Endpoint                     │ Role & Security                         │
+├──────────────────────────────┼─────────────────────────────────────────┤
+│ POST /api/sms-listener       │ Automated SMS parser for incoming MoMo   │
+│ POST /api/payments/mtn-submit│ Customer transaction ID submission      │
+│ POST /api/admin/mtn-verify   │ Admin verification (Requires Auth)      │
+│ POST /api/admin/mtn-reject   │ Admin rejection & stock release (Auth)  │
+│ GET  /api/orders/:ref/status │ Real-time polling for checkout modal    │
+│ POST /api/admin/check-in     │ Gate QR validation (Single-use stamp)   │
+└──────────────────────────────┴─────────────────────────────────────────┘
+```

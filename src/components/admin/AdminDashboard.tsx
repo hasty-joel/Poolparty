@@ -273,6 +273,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const [creatingDemo, setCreatingDemo] = useState(false);
+
+  const handleCreateDemoOrder = async () => {
+    setCreatingDemo(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const demoSuffix = Math.floor(1000 + Math.random() * 9000);
+      const res = await TicketService.initiateMtnPayment({
+        category: 'ORDINARY',
+        quantity: 1,
+        buyerName: `Demo Tester ${demoSuffix}`,
+        buyerEmail: `tester${demoSuffix}@example.com`,
+        buyerPhone: '0775198484',
+      });
+
+      if (!res.success || !res.orderRef) {
+        setActionError(res.message || 'Failed to initialize demo order.');
+        return;
+      }
+
+      const randomTxId = 'MTN' + Math.floor(1000000000 + Math.random() * 9000000000);
+      const submitRes = await TicketService.submitMtnTransaction({
+        orderRef: res.orderRef,
+        mtnTransactionId: randomTxId,
+        payerPhone: '0775198484',
+        notes: 'Simulated customer payment for admin verification test',
+      });
+
+      if (!submitRes.success) {
+        setActionError(submitRes.message || 'Failed to submit demo transaction ID.');
+        return;
+      }
+
+      await loadData();
+      setActionSuccess(`Demo order ${res.orderRef} created with Tx ID ${randomTxId}! You can now test 'Verify & Issue Ticket' or 'Reject Payment'.`);
+    } catch (err: any) {
+      setActionError('Error creating demo order: ' + (err?.message || err));
+    } finally {
+      setCreatingDemo(false);
+    }
+  };
+
   useEffect(() => {
     if (isAuthenticated) {
       loadData();

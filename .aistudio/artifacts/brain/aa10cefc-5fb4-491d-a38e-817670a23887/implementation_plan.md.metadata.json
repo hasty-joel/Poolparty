@@ -1,6 +1,6 @@
 {
-  "summary":  "Revised implementation plan: Replaces the standalone gallery with contextual photography scattered naturally across the existing website sections (Hero, Lineup, Ticket Tiers, and Venue).",
-  "updatedAt":  "2026-11-07T08:57:04.476205819Z",
+  "summary":  "Implementation plan detailing how MTN MoMoPay merchant payments are validated via both automated SMS matching and the Admin MoMo Desk, along with a guided end-to-end test walk-through.",
+  "updatedAt":  "2026-11-07T09:26:58.826593556Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
