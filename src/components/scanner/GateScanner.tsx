@@ -41,33 +41,131 @@ interface RecentGateCheckInItem {
   ticket_channel?: 'online' | 'hardcopy';
 }
 
-function playScanBeep(success: boolean = true) {
+// Web Audio Context for synthesized physical acoustic feedback
+let _sharedAudioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
   try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtxClass) return null;
+    if (!_sharedAudioCtx || _sharedAudioCtx.state === 'closed') {
+      _sharedAudioCtx = new AudioCtxClass();
+    }
+    if (_sharedAudioCtx.state === 'suspended') {
+      _sharedAudioCtx.resume().catch(() => {});
+    }
+    return _sharedAudioCtx;
+  } catch {
+    return null;
+  }
+}
+
+export type ScanSoundType = 'success' | 'vip_success' | 'fail' | 'already_used';
+
+/**
+ * High-clarity audible feedback chirps for gate staff:
+ * - 'success': Crisp ascending dual-tone chirp (880Hz -> 1320Hz / 1760Hz) with bright bell harmonics
+ * - 'vip_success': Rich celebratory triple-chime chord (Eb6, G6, Bb6) with shimmering harmonics
+ * - 'already_used': Double low buzz/warning chirp (300Hz -> 200Hz repeat) for duplicate entry attempt
+ * - 'fail': Heavy low buzz/error chirp (260Hz -> 140Hz descending sawtooth) for invalid/unpaid tickets
+ */
+function playScanBeep(type: ScanSoundType | boolean = 'success') {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+
+    // Normalizing legacy boolean parameter
+    const soundType: ScanSoundType = 
+      typeof type === 'boolean' 
+        ? (type ? 'success' : 'fail') 
+        : type;
+
+    const now = ctx.currentTime;
+
+    if (soundType === 'vip_success') {
+      // Celebratory triple-note royal chime: 1046.5Hz (C6), 1318.5Hz (E6), 1567.98Hz (G6)
+      const freqs = [1046.5, 1318.5, 1567.98, 2093];
+      freqs.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.05);
+
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.setValueAtTime(0.18, now + idx * 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.05 + 0.22);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now + idx * 0.05);
+        osc.stop(now + idx * 0.05 + 0.24);
+      });
+      return;
+    }
+
+    if (soundType === 'success') {
+      // Crisp, energetic positive scan chirp (dual ascending high tones)
+      // Note 1: 987.77Hz (B5) for 60ms
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(988, now);
+      gain1.gain.setValueAtTime(0.22, now);
+      gain1.gain.exponentialRampToValueAtTime(0.02, now + 0.07);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.07);
+
+      // Note 2: 1568Hz (G6) -> 1760Hz (A6) high sparkle
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(1480, now + 0.06);
+      osc2.frequency.exponentialRampToValueAtTime(1760, now + 0.14);
+      gain2.gain.setValueAtTime(0.001, now);
+      gain2.gain.setValueAtTime(0.24, now + 0.06);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.20);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.06);
+      osc2.stop(now + 0.21);
+      return;
+    }
+
+    if (soundType === 'already_used') {
+      // Stutter warning beep: two distinct abrasive low pulses (duplicate scan warning)
+      [0, 0.12].forEach((offset) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(330, now + offset);
+        osc.frequency.setValueAtTime(220, now + offset + 0.05);
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.setValueAtTime(0.25, now + offset);
+        gain.gain.exponentialRampToValueAtTime(0.005, now + offset + 0.09);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + offset);
+        osc.stop(now + offset + 0.10);
+      });
+      return;
+    }
+
+    // soundType === 'fail'
+    // Descending discordant buzzer (distinct rejected buzz)
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(280, now);
+    osc.frequency.exponentialRampToValueAtTime(140, now + 0.22);
+    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.exponentialRampToValueAtTime(0.005, now + 0.26);
     osc.connect(gain);
     gain.connect(ctx.destination);
-
-    if (success) {
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
-      gain.gain.setValueAtTime(0.18, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.14);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.14);
-    } else {
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(320, ctx.currentTime);
-      osc.frequency.setValueAtTime(240, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0.2, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.25);
-    }
+    osc.start(now);
+    osc.stop(now + 0.28);
   } catch {
     // Non-critical: AudioContext may be blocked before interaction
   }
@@ -274,18 +372,28 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
 
       if (res.status === 'ADMITTED') {
         setInputCode('');
-        if (soundEnabled) playScanBeep(true);
+        const isVip = res.ticket?.category === 'VIP';
+        if (soundEnabled) {
+          playScanBeep(isVip ? 'vip_success' : 'success');
+        }
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-          try { navigator.vibrate([100, 50, 100]); } catch {}
+          try { 
+            navigator.vibrate(isVip ? [120, 60, 120, 60, 180] : [100, 50, 100]); 
+          } catch {}
+        }
+      } else if (res.status === 'ALREADY_USED') {
+        if (soundEnabled) playScanBeep('already_used');
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          try { navigator.vibrate([250, 100, 250]); } catch {}
         }
       } else {
-        if (soundEnabled) playScanBeep(false);
+        if (soundEnabled) playScanBeep('fail');
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-          try { navigator.vibrate(200); } catch {}
+          try { navigator.vibrate(280); } catch {}
         }
       }
     } catch {
-      if (soundEnabled) playScanBeep(false);
+      if (soundEnabled) playScanBeep('fail');
       setResult({
         status: 'INVALID',
         message: 'Network error during verification. Check gate server connection.',
@@ -672,15 +780,23 @@ export const GateScanner: React.FC<GateScannerProps> = ({ onBack, onViewTicket }
           <div className="flex flex-wrap items-center gap-2.5 text-[11px] sm:text-xs">
             <button
               type="button"
-              onClick={() => setSoundEnabled(!soundEnabled)}
-              className={`p-2 rounded-lg border transition-colors cursor-pointer flex items-center gap-1.5 ${
+              onClick={() => {
+                const nextState = !soundEnabled;
+                setSoundEnabled(nextState);
+                if (nextState) {
+                  // Instant preview chirp and warm up AudioContext on user gesture
+                  playScanBeep('success');
+                }
+              }}
+              className={`px-2.5 py-1.5 rounded-lg border transition-colors cursor-pointer flex items-center gap-1.5 font-medium ${
                 soundEnabled 
-                  ? 'bg-amber-400/10 border-amber-400/30 text-amber-300' 
+                  ? 'bg-amber-400/15 border-amber-400/40 text-amber-300 shadow-sm' 
                   : 'bg-white/5 border-white/10 text-slate-400'
               }`}
-              title={soundEnabled ? 'Mute Scan Sound' : 'Enable Scan Sound'}
+              title={soundEnabled ? 'Chirps enabled (click to mute)' : 'Chirps muted (click to enable)'}
             >
-              {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              {soundEnabled ? <Volume2 className="w-4 h-4 text-amber-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
+              <span>{soundEnabled ? 'Chirps On' : 'Chirps Off'}</span>
             </button>
 
             <span className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/60 text-emerald-300 font-mono">
