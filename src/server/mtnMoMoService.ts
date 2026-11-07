@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 /**
  * MTN Mobile Money Merchant Service & API Readiness Module

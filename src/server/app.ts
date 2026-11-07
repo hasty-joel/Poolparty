@@ -10,7 +10,7 @@ import {
   processIncomingSms,
 } from './smsListenerService.js';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const SERVERLESS_ROUTE_PREFIXES = [
   '/inventory/',
@@ -537,11 +537,19 @@ Sitemap: ${baseUrl}/sitemap.xml
       });
 
       if (!result.success) {
-        if (result.code === 'API_DISABLED' || result.error === 'PAYMENT_PROVIDER_UNAVAILABLE' || result.error === 'SUPABASE_NOT_CONFIGURED') {
+        if (
+          result.code === 'API_DISABLED' ||
+          result.error === 'PAYMENT_PROVIDER_UNAVAILABLE' ||
+          result.error === 'SUPABASE_NOT_CONFIGURED' ||
+          result.error === 'SCHEMA_MISMATCH'
+        ) {
           if (result.retryAfterSeconds) {
             res.setHeader('Retry-After', String(result.retryAfterSeconds));
           }
           return res.status(503).json(result);
+        }
+        if (result.error === 'RELWORX_TIMEOUT') {
+          return res.status(502).json(result);
         }
         if (result.error === 'INSUFFICIENT_INVENTORY') {
           return res.status(409).json(result);
@@ -550,7 +558,8 @@ Sitemap: ${baseUrl}/sitemap.xml
       }
 
       return res.status(200).json(result);
-    } catch {
+    } catch (err: any) {
+      console.error('[relworx-initiate error]', err);
       return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Error initiating payment.' });
     }
   });

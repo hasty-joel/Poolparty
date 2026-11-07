@@ -3,7 +3,7 @@ import qrcode from 'qrcode';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 export interface PendingTicketInput {
   name: string;

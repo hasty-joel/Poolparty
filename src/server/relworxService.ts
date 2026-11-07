@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 /**
  * Official Relworx Payments API Service for Uganda Mobile Money (MTN & Airtel)

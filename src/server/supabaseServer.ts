@@ -1,10 +1,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { MtnMoMoService } from './mtnMoMoService.js';
+import { RelworxService } from './relworxService.js';
 import { safeCompareSecret, sanitizeDiagnosticText, CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE } from './gateSecurity.js';
 import type { OrderRecord, OrderStatus, PaymentNetwork, VerificationStatus } from '../types/order.js';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 type InitiationResult = {
   success: boolean;
@@ -1583,12 +1584,136 @@ export const SupabaseServerService = {
       };
     }
 
-    return {
-      success: false,
-      message: 'Relworx gateway has been decommissioned. Please use the hybrid Mobile Money payment flow.',
-      error: 'GATEWAY_DECOMMISSIONED',
-      retryable: false,
+    const rawKey = idempotencyKey?.trim();
+    if (rawKey) {
+      const cached = _recentIdempotencyResults.get(rawKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return { ...cached.result, reusedExistingOrder: true };
+      }
+      const existingInFlight = _inFlightInitiations.get(rawKey);
+      if (existingInFlight) {
+        return existingInFlight;
+      }
+    }
+
+    const execute = async (): Promise<InitiationResult> => {
+      // 1. Check circuit breaker cooldown
+      const cooldownSecs = RelworxService.getDisabledCooldownRemainingSeconds();
+      if (cooldownSecs > 0) {
+        return {
+          success: false,
+          message: CUSTOMER_PAYMENTS_UNAVAILABLE_MESSAGE,
+          error: 'PAYMENT_PROVIDER_UNAVAILABLE',
+          code: 'API_DISABLED',
+          retryable: true,
+          retryAfterSeconds: cooldownSecs,
+        };
+      }
+
+      const { client } = getSupabaseClient();
+      if (!client) {
+        return {
+          success: false,
+          message: 'Ticketing database is currently unavailable.',
+          error: 'SUPABASE_NOT_CONFIGURED',
+          retryable: true,
+        };
+      }
+
+      await this.releaseExpiredReservations();
+
+      const msisdn = phoneCheck.msisdn!;
+      const localPhone = '0' + msisdn.replace(/^\+?256/, '');
+
+      const reusable = await this.findReusableActivePendingOrder(client, {
+        buyerPhone,
+        msisdn,
+        localPhone,
+        category,
+        quantity,
+      });
+      if (reusable) {
+        return reusable;
+      }
+
+      const orderRef = `PP-RWX-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const unitPrice = category === 'VIP' ? 50000 : 20000;
+      const totalAmount = unitPrice * quantity;
+      const reservedUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+      const reservation = await this.reserveTicketsDirect(
+        category,
+        quantity,
+        buyerName.trim(),
+        buyerEmail.trim().toLowerCase(),
+        msisdn,
+        orderRef,
+        reservedUntil,
+        network,
+        unitPrice,
+        totalAmount
+      );
+
+      if (!reservation.success) {
+        return {
+          success: false,
+          message: reservation.message,
+          error: reservation.error || 'INSUFFICIENT_INVENTORY',
+        };
+      }
+
+      const payment = await RelworxService.requestPayment({
+        reference: orderRef,
+        phone: msisdn,
+        amount: totalAmount,
+        description: `Pool Party 2026 - ${quantity}x ${category} Pass`,
+        category,
+        buyerName: buyerName.trim(),
+      });
+
+      if (!payment.success) {
+        await this.releaseReservationByOrderRef(orderRef, 'failed');
+        return {
+          success: false,
+          message: payment.message,
+          error: payment.error || 'PAYMENT_PROVIDER_UNAVAILABLE',
+          code: payment.code,
+          retryable: payment.retryable,
+          retryAfterSeconds: payment.retryAfterSeconds,
+        };
+      }
+
+      const result: InitiationResult = {
+        success: true,
+        orderRef,
+        message: payment.message,
+        relworxInternalRef: payment.internal_reference,
+        reservedUntil,
+        totalAmountUgx: totalAmount,
+        gateway: 'relworx',
+      };
+
+      if (rawKey) {
+        _recentIdempotencyResults.set(rawKey, {
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          result,
+        });
+      }
+
+      return result;
     };
+
+    if (rawKey) {
+      const inFlight = execute();
+      _inFlightInitiations.set(rawKey, inFlight);
+      try {
+        return await inFlight;
+      } finally {
+        _inFlightInitiations.delete(rawKey);
+      }
+    }
+
+    return execute();
   },
 
 

@@ -73,7 +73,10 @@ async function startServer() {
   const httpServer = http.createServer(app);
 
   const cli = parseCliArgs(process.argv.slice(2));
-  const PORT = cli.port ?? (Number.parseInt(process.env.PORT || '3000', 10) || 3000);
+  // In AI Studio container environment, port 8080 is reserved by Nginx reverse proxy.
+  // The Node / Vite application must always bind to port 3000.
+  const envPort = process.env.PORT && process.env.PORT !== '8080' ? Number.parseInt(process.env.PORT, 10) : undefined;
+  const PORT = cli.port ?? envPort ?? 3000;
   const HOST = cli.host || process.env.HOST || '0.0.0.0';
 
   let closeVite: (() => Promise<void>) | undefined;
