@@ -1,6 +1,7 @@
 import React from 'react';
 import { MapPin, Phone, MessageSquare, ExternalLink, Clock } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
+import venueResortImg from '../assets/images/resort_venue_prince_1793036985739.jpg';
 
 export const VenueAndRsvp: React.FC = () => {
   return (
@@ -12,6 +13,21 @@ export const VenueAndRsvp: React.FC = () => {
             
             {/* Venue Info (7 cols) */}
             <div className="lg:col-span-7 space-y-4">
+              {/* Resort Grounds Photography */}
+              <div className="relative h-48 sm:h-56 w-full overflow-hidden rounded-xl border border-white/10 group">
+                <img
+                  src={venueResortImg}
+                  alt="Prince Resort Bunamwaya Bella Zone swimming pool, palm gardens, and sun decks"
+                  className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#0d1522] via-[#0d1522]/20 to-transparent" />
+                <div className="absolute bottom-3 left-3 text-[11px] sm:text-xs font-semibold text-white bg-black/70 backdrop-blur-md px-3 py-1 rounded-md border border-white/10">
+                  Prince Resort · Bunamwaya Bella Zone Pool Deck
+                </div>
+              </div>
+
               <div>
                 <span className="text-xs font-bold uppercase tracking-wider text-amber-400 block mb-1">
                   Venue & Location

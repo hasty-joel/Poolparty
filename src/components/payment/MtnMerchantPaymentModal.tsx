@@ -79,9 +79,6 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
   const [isSharingWhatsApp, setIsSharingWhatsApp] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
 
-  // Network selection: 'MTN' or 'AIRTEL'
-  const [selectedNetwork, setSelectedNetwork] = useState<'MTN' | 'AIRTEL'>('MTN');
-
   // Merchant & USSD configuration for MTN MoMo
   const [merchantCode, setMerchantCode] = useState<string | undefined>(initialMerchantCode);
   const [merchantName, setMerchantName] = useState<string>(initialMerchantName || 'Prince Resort (Pool Party)');
@@ -89,13 +86,6 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
   const [ussdDialUrl, setUssdDialUrl] = useState<string>(`tel:${(initialUssdCode || '*165*3#').replace(/#/g, '%23')}`);
   const [isConfigured, setIsConfigured] = useState<boolean>(initialIsConfigured !== false);
   const [configWarning, setConfigWarning] = useState<string | null>(null);
-
-  // Configuration for Airtel Money
-  const [airtelCode, setAirtelCode] = useState<string>('0755 198 484');
-  const [airtelName] = useState<string>('Prince Resort Bunamwaya (Pool Party)');
-  const [airtelUssd] = useState<string>('*185*9#');
-  const [airtelDialUrl] = useState<string>('tel:*185*9%23');
-  const [copiedAirtelCode, setCopiedAirtelCode] = useState(false);
 
   // Submission Form State
   const [transactionId, setTransactionId] = useState('');
@@ -227,7 +217,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
       });
   }, [status, issuedTickets, currentTicketIndex]);
 
-  const copyToClipboard = async (text: string, type: 'ref' | 'code' | 'airtel') => {
+  const copyToClipboard = async (text: string, type: 'ref' | 'code') => {
     let successful = false;
     try {
       if (navigator?.clipboard?.writeText) {
@@ -261,11 +251,6 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
       setTimeout(() => {
         setCopiedRef(false);
         setCopyRefFailed(false);
-      }, 2500);
-    } else if (type === 'airtel') {
-      setCopiedAirtelCode(successful);
-      setTimeout(() => {
-        setCopiedAirtelCode(false);
       }, 2500);
     } else {
       setCopiedMerchantCode(successful);
@@ -387,23 +372,19 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 xs:p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto animate-in fade-in duration-200">
       <div className="relative w-full max-w-xl bg-[#080E1E] border border-amber-500/30 rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden my-auto max-h-[94vh] flex flex-col">
         
-        {/* Dual Network Signature Accent Top Bar */}
-        <div className="h-1.5 sm:h-2 w-full bg-gradient-to-r from-[#FFCC00] via-amber-400 to-[#E60000] shrink-0" />
+        {/* MTN MoMo Signature Accent Top Bar */}
+        <div className="h-1.5 sm:h-2 w-full bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900] shrink-0" />
 
         {/* Modal Header */}
         <div className="px-3.5 sm:px-5 py-3 sm:py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60 shrink-0">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <div className="flex items-center -space-x-1 shrink-0">
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#FFCC00] flex items-center justify-center text-slate-950 font-black text-[11px] sm:text-xs shadow-md border border-amber-300 z-10">
-                MoMo
-              </div>
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#E60000] flex items-center justify-center text-white font-black text-[10px] sm:text-[11px] shadow-md border border-rose-400">
-                Airtel
-              </div>
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#FFCC00] flex flex-col items-center justify-center text-slate-950 font-black shadow-md border border-amber-300 shrink-0">
+              <span className="text-[10px] leading-tight font-black tracking-tight">MTN</span>
+              <span className="text-[7.5px] font-bold tracking-tighter uppercase">MoMo</span>
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                <h3 className="text-sm sm:text-base font-bold text-white truncate">Mobile Money Checkout</h3>
+                <h3 className="text-sm sm:text-base font-bold text-white truncate">MTN MoMoPay Checkout</h3>
                 <span className="text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   SMS Auto-Match
@@ -624,85 +605,40 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                 </div>
               )}
 
-              {/* Network Selection Tabs */}
-              <div className="flex items-center gap-2 p-1 bg-slate-900/90 rounded-xl border border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setSelectedNetwork('MTN')}
-                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
-                    selectedNetwork === 'MTN'
-                      ? 'bg-[#FFCC00] text-slate-950 shadow-md font-black'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  <span>MTN Mobile Money (*165*3#)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedNetwork('AIRTEL')}
-                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
-                    selectedNetwork === 'AIRTEL'
-                      ? 'bg-[#E60000] text-white shadow-md font-black'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full bg-rose-400" />
-                  <span>Airtel Money (*185*9#)</span>
-                </button>
-              </div>
-
-              {/* Step 1: Payment Instructions Card (Dynamic per Network) */}
-              <div className={`p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-[#121E3A] via-[#0E172E] to-[#0A1124] border-2 shadow-xl space-y-4 ${
-                selectedNetwork === 'MTN' ? 'border-[#FFCC00]/40' : 'border-rose-500/40'
-              }`}>
+              {/* Step 1: Payment Instructions Card */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-[#121E3A] via-[#0E172E] to-[#0A1124] border-2 border-[#FFCC00]/40 shadow-xl space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className={`text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 ${
-                    selectedNetwork === 'MTN' ? 'text-[#FFCC00]' : 'text-rose-400'
-                  }`}>
-                    <span className={`w-2 h-2 rounded-full animate-pulse ${
-                      selectedNetwork === 'MTN' ? 'bg-[#FFCC00]' : 'bg-rose-500'
-                    }`} />
-                    Step 1: Pay via {selectedNetwork === 'MTN' ? 'MTN MoMoPay' : 'Airtel Money'}
+                  <span className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 text-[#FFCC00]">
+                    <span className="w-2 h-2 rounded-full animate-pulse bg-[#FFCC00]" />
+                    Step 1: Pay via MTN MoMoPay (*165*3#)
                   </span>
-                  <span className="text-[11px] font-mono font-bold text-slate-300 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-700">
-                    USSD: {selectedNetwork === 'MTN' ? ussdCode : airtelUssd}
+                  <span className="text-[11px] font-mono font-bold text-amber-300 bg-slate-900/90 px-2 py-0.5 rounded border border-amber-400/30">
+                    USSD: {ussdCode}
                   </span>
                 </div>
 
                 {/* Code & Amount Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                  {/* Merchant / Phone Box */}
-                  <div className={`bg-slate-950/80 p-3.5 rounded-xl border flex flex-col justify-between gap-2.5 ${
-                    selectedNetwork === 'MTN' ? 'border-amber-400/30' : 'border-rose-500/30'
-                  }`}>
+                  {/* Merchant Code Box */}
+                  <div className="bg-slate-950/80 p-3.5 rounded-xl border border-amber-400/30 flex flex-col justify-between gap-2.5">
                     <div>
                       <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-                        {selectedNetwork === 'MTN' ? 'Merchant Code' : 'Airtel Line / Merchant'}
+                        MTN MoMoPay Merchant Code
                       </span>
-                      <span className={`text-2xl sm:text-3xl font-black font-mono tracking-wider select-all ${
-                        selectedNetwork === 'MTN' ? 'text-[#FFCC00]' : 'text-rose-400'
-                      }`}>
-                        {selectedNetwork === 'MTN' ? (merchantCode || '672190') : airtelCode}
+                      <span className="text-2xl sm:text-3xl font-black font-mono tracking-wider select-all text-[#FFCC00]">
+                        {merchantCode || '672190'}
                       </span>
                       <span className="text-[10.5px] text-slate-300 block mt-0.5 truncate">
-                        {selectedNetwork === 'MTN' ? merchantName : airtelName}
+                        {merchantName}
                       </span>
                     </div>
                     
                     <button
                       type="button"
-                      onClick={() => {
-                        const target = selectedNetwork === 'MTN' ? (merchantCode || '672190') : airtelCode;
-                        copyToClipboard(target, selectedNetwork === 'MTN' ? 'code' : 'airtel');
-                      }}
-                      className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer border ${
-                        selectedNetwork === 'MTN'
-                          ? 'bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border-amber-400/30'
-                          : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border-rose-500/30'
-                      }`}
+                      onClick={() => copyToClipboard(merchantCode || '672190', 'code')}
+                      className="w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer border bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border-amber-400/30"
                     >
-                      {(selectedNetwork === 'MTN' ? copiedMerchantCode : copiedAirtelCode) ? (
+                      {copiedMerchantCode ? (
                         <>
                           <Check className="w-3.5 h-3.5 text-emerald-400" />
                           <span>Copied Code!</span>
@@ -710,7 +646,7 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                       ) : (
                         <>
                           <Copy className="w-3.5 h-3.5" />
-                          <span>Copy {selectedNetwork === 'MTN' ? 'Merchant Code' : 'Airtel Number'}</span>
+                          <span>Copy Merchant Code</span>
                         </>
                       )}
                     </button>
@@ -738,16 +674,12 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                 {/* Primary Action Buttons: Open USSD Dialer & Manual ID */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                   <a
-                    href={selectedNetwork === 'MTN' ? ussdDialUrl : airtelDialUrl}
-                    className={`w-full min-h-[46px] py-2.5 px-4 rounded-xl hover:brightness-110 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-98 cursor-pointer text-center ${
-                      selectedNetwork === 'MTN'
-                        ? 'bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900] text-slate-950'
-                        : 'bg-gradient-to-r from-[#E60000] via-rose-600 to-red-700 text-white'
-                    }`}
-                    title="Open phone dialer with USSD code prefilled"
+                    href={ussdDialUrl}
+                    className="w-full min-h-[46px] py-2.5 px-4 rounded-xl hover:brightness-110 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-98 cursor-pointer text-center bg-gradient-to-r from-[#FFCC00] via-[#FFD700] to-[#FF9900] text-slate-950"
+                    title="Open phone dialer with MTN USSD code prefilled"
                   >
                     <PhoneCall className="w-4 h-4 fill-current shrink-0" />
-                    <span>Open {selectedNetwork === 'MTN' ? 'MTN USSD (*165*3#)' : 'Airtel USSD (*185*9#)'}</span>
+                    <span>Open MTN USSD (*165*3#)</span>
                   </a>
 
                   <button
@@ -778,53 +710,30 @@ export const MtnMerchantPaymentModal: React.FC<MtnMerchantPaymentModalProps> = (
                 {/* USSD Prompt Walkthrough */}
                 <div className="bg-slate-950/70 p-3.5 sm:p-4 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-2">
                   <div className="font-semibold text-white flex items-center gap-2">
-                    <Smartphone className="w-4 h-4 text-amber-400" />
-                    <span>How to pay on your phone ({selectedNetwork}):</span>
+                    <Smartphone className="w-4 h-4 text-[#FFCC00]" />
+                    <span>How to pay on your phone with MTN MoMo:</span>
                   </div>
                   
-                  {selectedNetwork === 'MTN' ? (
-                    <ol className="list-decimal list-inside space-y-1.5 text-slate-300 text-[11.5px] pl-1 leading-relaxed">
-                      <li>
-                        Tap <strong className="text-amber-300">Open MTN USSD</strong> above (or dial <strong className="text-[#FFCC00] font-mono">{ussdCode}</strong> in your phone dialer).
-                      </li>
-                      <li>
-                        Select <strong className="text-white">MoMoPay</strong> on the MTN menu.
-                      </li>
-                      <li>
-                        When prompted for Merchant Code, enter or paste: <strong className="text-[#FFCC00] font-mono">{merchantCode || '672190'}</strong>.
-                      </li>
-                      <li>
-                        Enter exact Amount: <strong className="text-white font-mono">UGX {totalAmountUgx.toLocaleString()}</strong>.
-                      </li>
-                      <li>
-                        When prompted for Reference / Reason, enter: <strong className="text-amber-300 font-mono">{orderRef}</strong>.
-                      </li>
-                      <li>
-                        Enter your secret <strong className="text-white">MTN Mobile Money PIN</strong> to authorize the transfer.
-                      </li>
-                    </ol>
-                  ) : (
-                    <ol className="list-decimal list-inside space-y-1.5 text-slate-300 text-[11.5px] pl-1 leading-relaxed">
-                      <li>
-                        Tap <strong className="text-rose-300">Open Airtel USSD</strong> above (or dial <strong className="text-rose-400 font-mono">{airtelUssd}</strong> in your dialer).
-                      </li>
-                      <li>
-                        Select <strong className="text-white">Pay Merchant</strong> or Send Money on the Airtel menu.
-                      </li>
-                      <li>
-                        Enter Merchant Code / Phone Number: <strong className="text-rose-400 font-mono">{airtelCode}</strong>.
-                      </li>
-                      <li>
-                        Enter exact Amount: <strong className="text-white font-mono">UGX {totalAmountUgx.toLocaleString()}</strong>.
-                      </li>
-                      <li>
-                        When prompted for Reference / Reason, enter: <strong className="text-amber-300 font-mono">{orderRef}</strong>.
-                      </li>
-                      <li>
-                        Enter your secret <strong className="text-white">Airtel Money PIN</strong> to authorize the transfer.
-                      </li>
-                    </ol>
-                  )}
+                  <ol className="list-decimal list-inside space-y-1.5 text-slate-300 text-[11.5px] pl-1 leading-relaxed">
+                    <li>
+                      Tap <strong className="text-amber-300">Open MTN USSD</strong> above (or dial <strong className="text-[#FFCC00] font-mono">{ussdCode}</strong> in your phone dialer).
+                    </li>
+                    <li>
+                      Select <strong className="text-white">MoMoPay</strong> on the MTN menu.
+                    </li>
+                    <li>
+                      When prompted for Merchant Code, enter or paste: <strong className="text-[#FFCC00] font-mono">{merchantCode || '672190'}</strong>.
+                    </li>
+                    <li>
+                      Enter exact Amount: <strong className="text-white font-mono">UGX {totalAmountUgx.toLocaleString()}</strong>.
+                    </li>
+                    <li>
+                      When prompted for Reference / Reason, enter: <strong className="text-amber-300 font-mono">{orderRef}</strong>.
+                    </li>
+                    <li>
+                      Enter your secret <strong className="text-white">MTN Mobile Money PIN</strong> to authorize the transfer.
+                    </li>
+                  </ol>
 
                   <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10.5px] text-amber-200/90 flex items-start gap-2 mt-2">
                     <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />

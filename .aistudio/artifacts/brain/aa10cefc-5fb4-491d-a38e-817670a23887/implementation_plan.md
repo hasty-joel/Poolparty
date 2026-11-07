@@ -1,111 +1,90 @@
-# Pool Party Imagery & Venue Showcase Gallery
+# Scattered Contextual Imagery Across Pool Party Website
 
-Integrate high-fidelity photography across Prince Resort Bunamwaya's venue showcase, poolside vibes, and VIP experience gallery with an interactive lightbox preview and direct ticket-booking CTAs.
+Scatter authentic, high-fidelity poolside and venue photography organically across the existing sections of the Pool Party website—enhancing the Hero, Lineup, Ticket Tiers, and Venue sections without a standalone gallery.
 
 ### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following directions were confirmed during interactive clarification and shape this visual implementation:
+> Revised per your feedback: **No dedicated or standalone gallery**. Instead, curated photography is embedded directly into the flow of existing components so visitors naturally experience the venue, vibes, and VIP perks as they scroll.
 
-- **Confirmed Image Placement**: Prominently featured across a dedicated **Venue Showcase & Poolside Experience Gallery** (between Lineup and Ticket Purchase), the **Venue & Location Section**, and the **VIP Cabana Spotlight**.
-- **Confirmed Visual Aesthetic**: **Vibrant tropical day-to-night poolside party aesthetic**—warm sun-drenched turquoise waters, lush palm foliage, stylish resort loungers, ambient twilight pool illumination, and premium cocktail hospitality.
-- **Interaction Model (Default)**: **Inline curated photo cards with lightbox modal preview**—visitors can tap any photo to view full-resolution photography, descriptive experience captions, and an instant "Get Tickets" shortcut.
+- **Revised Layout Strategy**: Instead of clustering photos into a single gallery or grid, images are scattered across four key existing sections:
+  1. **Lineup & Vibe Cards**: Embedding photography directly into the Trevor DJ and Sunset Headline stage cards.
+  2. **Ticket Category Tier Cards (Ordinary vs. VIP)**: Adding vivid tier-specific imagery directly inside the Ordinary Pass (poolside daybeds) and VIP Pass (twilight cabana lounge & bottle service) checkout cards.
+  3. **Venue & RSVP Location Block**: Embedding the Prince Resort Bunamwaya architectural pool deck photo alongside the Google Maps and contact panel.
+  4. **Lifestyle Accent Spots**: Adding natural photo accents for poolside cocktails/grill and daytime water lounging within the existing flow.
+- **Visual Aesthetic**: Vibrant tropical day-to-night poolside party aesthetic with authentic Ugandan resort lighting, clear waters, and warm twilight tones.
+- **Preservation Principle**: No disruptive full-page overlays, no heavy carousels, and no disruption to the existing Supabase live inventory or MTN Mobile Money payment flows.
 
 ---
 
 ### 1. Overview & Core Concept
 
-- **What It Does**: Enhances the Pool Party 2026 landing page with vivid, authentic visual proof of the event atmosphere at Prince Resort Bunamwaya. Combines high-resolution photography with clear captions, a responsive asymmetric Bento gallery layout, and an accessible, smooth image lightbox modal.
-- **Target Audience / Persona**: Event-goers, music lovers, VIP table bookers, and party groups in Kampala and Wakiso looking for a premium, high-energy poolside social retreat.
-- **Key Value**: Replaces text-heavy descriptions with rich visual evidence of the luxury resort pool, sound setup, tropical cocktails, and VIP cabanas, dramatically increasing buyer confidence and ticket conversions.
+- **What It Does**: Distributes high-resolution, thematic photography across the existing website sections so that imagery supports the copy and value proposition at every touchpoint.
+- **Target Audience / Persona**: Attendees, party groups, and VIP guests exploring the event details, lineup, ticket options, and location.
+- **Key Value**: Provides effortless visual context throughout the browsing journey. Visitors immediately see the stage setup when reading about Trevor DJ, see the VIP cabana experience when choosing their ticket tier, and see the resort grounds when looking up the venue.
 
 ---
 
-### 2. User Experience & Visual Design
+### 2. User Experience & Visual Placement
 
-#### Key User Flows
-1. **Browsing the Event Flow**: As attendees scroll past the Hero and Lineup sections, they encounter a visually captivating 4-card asymmetric Bento gallery titled **The Poolside & Venue Experience**.
-2. **Category Tabs & Filtering**: Users can filter between curated perspectives:
-   - `All Moments`: The complete 6-image curated collection.
-   - `Poolside Vibes`: Sun deck loungers, crystal water, and day-to-night swim atmosphere.
-   - `VIP & Cabanas`: Private shaded lounges, twilight lighting, and bottle service setups.
-   - `Sound & Sips`: Trevor DJ acoustic sound booth, fresh fruit smoothies, and artisan cocktails.
-3. **Interactive Lightbox Inspection**: Clicking any image opens a distraction-free, high-resolution modal with:
-   - Full-bleed image scaling with preserved aspect ratio.
-   - Editorial caption and ambient detail tag (e.g., *Heated Water*, *Twilight Illumination*, *VIP Bottle Service*).
-   - Navigation controls (Next / Previous buttons, keyboard Left/Right arrows, ESC to close).
-   - Direct CTA: *"Reserve Passes from UGX 20,000"*, which smoothly scrolls to the live ticket inventory.
-4. **Venue & Location Integration**: In the `Venue & RSVP` section, a contextual resort venue preview card is embedded alongside the Google Maps button, anchoring the physical location at Bunamwaya Bella Zone.
+#### Scattered Image Touchpoints
+1. **Lineup & Stage Section (`LineupAndVibe.tsx`)**:
+   - **Host & Stage Card**: Feature image of the poolside DJ booth and high-energy acoustic sound rig integrated into the Trevor DJ card.
+   - **Sunset Headline Card**: Atmospheric twilight poolside silhouette photo illustrating the sun setting over Bunamwaya for the Surprise Artist announcement.
+2. **Ticket Purchase Tiers (`TicketPurchase.tsx`)**:
+   - **Ordinary Pass Card (UGX 20,000)**: Embedded photo showing the sun-drenched turquoise resort pool and day loungers.
+   - **VIP Pass Card (UGX 50,000)**: Embedded luxury photo showcasing private covered cabanas, twilight lighting, and dedicated bottle service attendants.
+3. **Venue & Location Block (`VenueAndRsvp.tsx`)**:
+   - **Resort Grounds Photo**: High-resolution wide photograph of Prince Resort Bunamwaya's pool deck and palm gardens embedded right above the Google Maps action button.
+4. **Poolside Hospitality Accents**:
+   - Subtle, crisp photo pairings for tropical cocktails / grill bites and poolside relaxation woven into the event details without disturbing the clean layout.
 
-#### Visual Identity & Theme
-- **Color Discipline (60-30-10)**:
-  - `60% Neutral Canvas`: Deep obsidian `#080c14` and rich midnight slate `#0d1522`.
-  - `30% Structural Surfaces`: Hairline borders (`border-white/10`), subtle dark glass panels (`bg-[#050b14]/70`), and crisp unboxed text metadata with `·` separators.
-  - `10% Accent Intent`: Warm marigold/amber (`#F59E0B`) for VIP cues and primary CTAs, with tropical electric cyan (`#06B6D4`) for water highlights.
-- **Typography**:
-  - Display Headings: Bold geometric headline typography (`font-display font-black tracking-tight text-white`).
-  - Editorial Kicker: Natural human title-case subheadings (`01. Crystal Waters & Sun Loungers`, `02. Twilight VIP Cabanas`).
-  - No code-comment prefixes (`//`), no mechanical uppercase tags, and no arbitrary badge islands.
-- **Accessibility & Touch Targets**:
-  - All interactive thumbnail triggers and lightbox buttons have $\ge 44\text{px}$ touch targets.
-  - Full keyboard trap and focus restoration (`Esc` key, arrow keys, `Tab` cycling) in the lightbox modal.
-  - Image tags enforce `referrerPolicy="no-referrer"`, descriptive `alt` text, and graceful CSS skeleton fallback containers.
+#### Visual Styling & Layout Discipline
+- **Aspect Ratio & Containment**: Clean `16:9` and `4:3` cropped imagery with smooth rounded corners (`rounded-xl`), subtle hairline borders (`border border-white/10`), and gentle dark gradient scrims (`bg-gradient-to-t from-[#080c14] via-transparent to-transparent`) ensuring all typography remains 100% legible.
+- **Anti-Slop Cleanliness**:
+  - No decorative floating sticker frames, no generic sparkle overlays, and no broken external image links.
+  - Zero pill-badge sandwiches on image headers.
+  - Full responsive optimization for small mobile screens (320px–375px) up to 1440px desktop displays.
 
 ---
 
 ### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Asymmetric Bento Gallery vs. Generic Carousel**
-  - *Chosen Approach*: Responsive 12-column asymmetric Bento layout with 1 marquee feature card (`col-span-7`) alongside balanced supporting cards (`col-span-5`), accompanied by an interactive modal.
-  - *Why*: Horizontal carousels hide 70% of photos on desktop screens; an asymmetric Bento grid immediately rewards visual scannability on both desktop and mobile without requiring tedious swiping.
-  - *Alternatives Considered*: A slider/carousel was considered but dismissed as it reduces immediate visual impact and requires more user effort.
+- **Decision 1: Section-Integrated Photography vs. Dedicated Gallery Section**
+  - *Chosen Approach*: Scatter photos directly into the sections where decisions happen (Lineup, Tickets, Venue).
+  - *Why*: Eliminates user fatigue from scrolling through an isolated gallery block. Placing images directly next to ticket options and venue directions directly reinforces the purchase decision.
+  - *Alternatives Considered*: The standalone Bento gallery was removed per your explicit instruction.
 
-- **Decision 2: Image Pipeline & Fallback Discipline**
-  - *Chosen Approach*: Curate the existing high-fidelity Prince Resort visual assets in `src/assets/images/` and generate two supplementary high-resolution assets (VIP twilight cabana lounge & tropical pool entry) via `generate_image`.
-  - *Why*: Eliminates broken third-party image URLs, guarantees zero-latency asset loading, and ensures consistent lighting and color grading across the entire landing page.
-  - *Alternatives Considered*: External Unsplash or CDN links were rejected per the anti-slop and hermetic build constraints.
+- **Decision 2: Lightweight Asset Integration**
+  - *Chosen Approach*: Leverage existing verified assets in `src/assets/images/` with optimized responsive loading (`loading="lazy"`, `referrerPolicy="no-referrer"`).
+  - *Why*: Instant page load with zero network latency, zero external CDN dependencies, and guaranteed stability on Vercel.
 
 ---
 
-### 4. Technical Architecture & Data Strategy
+### 4. Technical Architecture & Component Mapping
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                           App.tsx                               │
-│  ├── Navbar (Header navigation with smooth scroll anchors)      │
-│  ├── Hero (Event branding, date, countdown, 20K/50K selector)   │
-│  ├── LineupAndVibe (Trevor DJ, surprise headliner, DJ roster)   │
-│  ▼                                                              │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ ExperienceGallery.tsx (NEW)                               │  │
-│  │ ├── Interactive Filter Tabs (All / Pool / VIP / Sips)     │  │
-│  │ ├── Asymmetric Bento Grid of 4–6 Curated Image Cards      │  │
-│  │ └── Lightbox Trigger Handlers (Click / Enter / Space)     │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│  ▼                                                              │
-│  ├── TicketPurchase.tsx (Supabase live inventory 20K / 50K)     │
-│  ├── VenueAndRsvp.tsx (Updated with Prince Resort photo preview)│
-│  └── Footer.tsx                                                 │
 │                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ ImageLightboxModal.tsx (NEW)                              │  │
-│  │ ├── Fullscreen Backdrop with backdrop-blur & dark scrim   │  │
-│  │ ├── High-res Image Renderer with aspect-ratio containment │  │
-│  │ ├── Keyboard Navigation (ESC, Left, Right Arrow Keys)     │  │
-│  │ └── Direct Booking CTA ("Reserve Passes From UGX 20,000") │  │
-│  └───────────────────────────────────────────────────────────┘  │
+│  ├── Hero.tsx                                                   │
+│  │   └── Ambient resort pool backdrop with subtle dark scrim    │
+│  │                                                              │
+│  ├── LineupAndVibe.tsx (UPDATED)                                │
+│  │   ├── Trevor DJ Host Card ──► [Poolside Sound Deck Photo]    │
+│  │   └── Surprise Artist Card ─► [Twilight Sunset Vibe Photo]   │
+│  │                                                              │
+│  ├── TicketPurchase.tsx (UPDATED)                               │
+│  │   ├── Ordinary 20K Tier Card ──► [Daybed & Pool Water Photo] │
+│  │   └── VIP 50K Tier Card ───────► [VIP Cabana & Lounge Photo] │
+│  │                                                              │
+│  └── VenueAndRsvp.tsx (UPDATED)                                 │
+│      └── Prince Resort Bunamwaya ──► [Resort Grounds Photo]     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-#### Image Asset Inventory
-1. `resort_pool_luxury`: Main resort pool with sun loungers and crystal water (Hero & Bento anchor).
-2. `pool_atmosphere`: Daytime poolside ambiance, floating loungers, and tropical greenery.
-3. `vip_cabana_twilight`: Luxury twilight cabana with ambient underwater illumination and plush seating.
-4. `poolside_music`: Trevor DJ acoustic sound booth and poolside audio setup.
-5. `pool_refreshments`: Artisan tropical fruit cocktails, chilled drinks, and grill comfort food.
-6. `resort_venue_prince`: Architectural exterior and pool deck landscape at Bunamwaya Bella.
-
-#### Interactive Component & State Mapping
-- `activeCategory`: String state (`'all' | 'pool' | 'vip' | 'music_sips'`) controlling the displayed Bento set.
-- `lightboxIndex`: Number or `null` state in `ExperienceGallery.tsx`. When non-null, `<ImageLightboxModal>` renders with the active photo index, handling cycling via `(index + 1) % total` and `(index - 1 + total) % total`.
-- `onBookPasses`: Triggers a smooth scroll to `#tickets` while closing the lightbox modal.
+#### Files to Update During Execution
+1. `src/components/LineupAndVibe.tsx`: Embed stage & twilight sunset imagery into the host and headline cards.
+2. `src/components/TicketPurchase.tsx`: Add tier-specific visual cards illustrating Ordinary vs. VIP experiences.
+3. `src/components/VenueAndRsvp.tsx`: Embed the Prince Resort pool deck photo above the location & directions button.
+4. `test/supabase-ticketing.test.ts`: Verify test suite and build stability.

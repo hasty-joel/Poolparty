@@ -18,6 +18,8 @@ import { TicketRecord, PublicInventoryCounts } from '../types/inventory';
 import { MtnMerchantPaymentModal } from './payment/MtnMerchantPaymentModal';
 import { TicketLookupModal } from './ticket/TicketLookupModal';
 import { PoolPartyLogo } from './brand/PoolPartyLogo';
+import poolAtmosphereImg from '../assets/images/pool_atmosphere_1793036984503.jpg';
+import vipCabanaImg from '../assets/images/hero_pool_luxury_1793036984424.jpg';
 
 interface TicketPurchaseProps {
   onContinueToPayment: (ticket: TicketRecord) => void;
@@ -188,7 +190,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
     else if (cleanedPhone.startsWith('0')) cleanedPhone = cleanedPhone.substring(1);
 
     if (!/^[73][0-9]{8}$/.test(cleanedPhone)) {
-      errs.phone = 'Please provide a valid Uganda MTN or Airtel Mobile Money phone number (e.g. 0775 198 484 or 0755 198 484).';
+      errs.phone = 'Please provide a valid Uganda MTN Mobile Money phone number (e.g. 0775 198 484 or 078X XXX XXX).';
     }
 
     if (remainingInventory !== null && remainingInventory < quantity) {
@@ -269,7 +271,7 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
             Select Your Pool Pass
           </h2>
           <p className="text-slate-400 text-xs sm:text-sm mt-2">
-            Choose an Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000) below to unlock Mobile Money checkout (MTN MoMo & Airtel Money).
+            Choose an Ordinary Pass (UGX 20,000) or VIP Pass (UGX 50,000) below to unlock MTN Mobile Money checkout (MoMoPay).
           </p>
 
           <div className="mt-3">
@@ -310,6 +312,21 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
             )}
 
             <div className="relative z-10">
+              {/* Ordinary Pass Experience Photography */}
+              <div className="relative h-28 sm:h-32 w-full overflow-hidden rounded-lg mb-3">
+                <img
+                  src={poolAtmosphereImg}
+                  alt="Ordinary Pass - Prince Resort crystal pool and sun loungers"
+                  className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#0d1522] via-[#0d1522]/30 to-transparent" />
+                <div className="absolute bottom-2 left-2 text-[10px] font-semibold text-amber-300 bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded border border-white/10">
+                  Pool & Sun Deck Access
+                </div>
+              </div>
+
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
                   General Entry
@@ -377,6 +394,21 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
             )}
 
             <div className="relative z-10">
+              {/* VIP Pass Experience Photography */}
+              <div className="relative h-28 sm:h-32 w-full overflow-hidden rounded-lg mb-3">
+                <img
+                  src={vipCabanaImg}
+                  alt="VIP Pass - Twilight cabana lounge and poolside bottle service"
+                  className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#0d1522] via-[#0d1522]/30 to-transparent" />
+                <div className="absolute bottom-2 left-2 text-[10px] font-semibold text-cyan-300 bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded border border-white/10">
+                  VIP Cabanas & Bottle Service
+                </div>
+              </div>
+
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
                   <Crown className="w-3.5 h-3.5" />
@@ -659,33 +691,27 @@ export const TicketPurchase: React.FC<TicketPurchaseProps> = ({
                       <div className="absolute top-0 right-0 w-32 h-32 bg-amber-400/5 rounded-full blur-2xl pointer-events-none" />
 
                       <div className="flex items-start gap-3">
-                        <div className="flex items-center -space-x-1 shrink-0">
-                          <div className="w-9 h-9 rounded-xl bg-[#FFCC00] text-black font-black flex flex-col items-center justify-center shadow-md border border-amber-300 z-10">
-                            <span className="text-[10px] leading-tight font-black tracking-tight">MTN</span>
-                            <span className="text-[7.5px] font-bold tracking-tighter uppercase">MoMo</span>
-                          </div>
-                          <div className="w-9 h-9 rounded-xl bg-[#E60000] text-white font-black flex flex-col items-center justify-center shadow-md border border-rose-400">
-                            <span className="text-[9px] leading-tight font-black tracking-tight">AIR</span>
-                            <span className="text-[7.5px] font-bold tracking-tighter uppercase">TEL</span>
-                          </div>
+                        <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#FFCC00] text-black font-black flex flex-col items-center justify-center shadow-md border border-amber-300 shrink-0">
+                          <span className="text-[10px] leading-tight font-black tracking-tight">MTN</span>
+                          <span className="text-[7.5px] font-bold tracking-tighter uppercase">MoMo</span>
                         </div>
 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                            <span className="text-xs sm:text-sm font-bold text-white">MTN MoMo & Airtel Money</span>
+                            <span className="text-xs sm:text-sm font-bold text-white">MTN Mobile Money (MoMoPay)</span>
                             <span className="text-[10px] sm:text-[11px] font-semibold text-emerald-400">
                               · Instant SMS Verification
                             </span>
                           </div>
                           <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                            Pay with your phone via MTN MoMo (*165*3#) or Airtel Money (*185*9#). Your official QR pass activates automatically when your transfer completes!
+                            Pay with your phone via MTN MoMo (*165*3#). Enter our official MTN MoMoPay merchant code and include your order reference to activate your official QR ticket pass automatically!
                           </p>
 
                           <div className="mt-2.5 p-2.5 rounded-lg bg-[#080c14]/80 border border-white/10 flex flex-wrap items-center justify-between gap-2">
                             <div className="text-xs">
-                              <span className="text-slate-400 block text-[10px] uppercase font-mono">Accepted Networks</span>
+                              <span className="text-slate-400 block text-[10px] uppercase font-mono">Payment Channel</span>
                               <span className="font-mono font-bold text-amber-300 text-xs">
-                                MTN (*165*3#) &bull; Airtel (*185*9#)
+                                MTN MoMoPay (*165*3#)
                               </span>
                             </div>
                             <span className="text-[10.5px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded">

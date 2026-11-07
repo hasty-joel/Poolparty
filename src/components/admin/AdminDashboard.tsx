@@ -1870,7 +1870,7 @@ notify pgrst, 'reload schema';`;
 
             {orders.length === 0 ? (
               <div className="p-8 text-center text-xs text-slate-400">
-                No orders recorded yet. As customers select MTN/Airtel on the website, orders will appear here.
+                No orders recorded yet. As customers check out with MTN MoMo on the website, orders will appear here.
               </div>
             ) : (
               <div className="overflow-x-auto">

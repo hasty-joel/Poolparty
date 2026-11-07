@@ -16,7 +16,7 @@ const FAQ_LIST: FAQItem[] = [
   {
     id: 'payment-failure',
     question: 'What happens if my payment fails?',
-    answer: 'If your MTN Mobile Money prompt times out, you enter an incorrect PIN, or your card bank declines the transaction, your reservation is safely rolled back without deducting any money. You will receive an on-screen notice with options to retry or switch between MTN MoMo, Airtel Money, or Card.',
+    answer: 'If your MTN Mobile Money prompt times out or you enter an incorrect PIN, your reservation is safely rolled back without deducting any money. You will receive an on-screen notice with options to retry your MTN MoMoPay transaction.',
   },
   {
     id: 'reuse-ticket',

@@ -355,7 +355,8 @@ describe('Pool Party Supabase Ticketing & Purchase Flow Tests', () => {
     }) as typeof fetch;
 
     try {
-      const paymentRes = await TicketService.initiateRelworxPayment({
+      const initiateFn = (TicketService as any).initiateRelworxPayment || (TicketService as any).initiateMtnPayment;
+      const paymentRes = await initiateFn.call(TicketService, {
         category: 'ORDINARY',
         quantity: 1,
         buyerName: 'Test Buyer',

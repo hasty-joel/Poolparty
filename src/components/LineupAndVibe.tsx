@@ -1,6 +1,9 @@
 import React from 'react';
 import { Headphones, Music, Trophy, Utensils, Flame, Sparkles } from 'lucide-react';
 import { EVENT_DATA } from '../types/event';
+import poolsideMusicImg from '../assets/images/poolside_music_1793036985215.jpg';
+import twilightVibeImg from '../assets/images/hero_pool_luxury_1793036984424.jpg';
+import refreshmentsImg from '../assets/images/pool_refreshments_1793036986532.jpg';
 
 export const LineupAndVibe: React.FC = () => {
   return (
@@ -20,44 +23,76 @@ export const LineupAndVibe: React.FC = () => {
           </p>
         </div>
 
-        {/* Host & Headliner Cards */}
+        {/* Host & Headliner Cards with scattered poolside photography */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 mb-8 sm:mb-10">
           
           {/* Host Card */}
-          <div className="bg-[#0d1522] p-4 sm:p-6 rounded-xl border border-white/10 flex flex-col justify-between space-y-4">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
-                Official Event Host
-              </span>
-              <h3 className="text-2xl font-black text-white font-display">
-                Trevor DJ
-              </h3>
-              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                Directing the poolside energy, hyping the crowd, and orchestrating transitions from afternoon kick-off till late night.
-              </p>
+          <div className="bg-[#0d1522] rounded-xl border border-white/10 overflow-hidden flex flex-col justify-between group hover:border-amber-400/40 transition-colors shadow-lg">
+            <div className="relative h-40 sm:h-48 w-full overflow-hidden">
+              <img
+                src={poolsideMusicImg}
+                alt="Trevor DJ poolside stage and audio rig at Prince Resort Bunamwaya"
+                className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
+                referrerPolicy="no-referrer"
+                loading="lazy"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#0d1522] via-[#0d1522]/30 to-transparent" />
+              <div className="absolute bottom-2.5 left-3 text-[10px] font-bold text-amber-300 uppercase tracking-wider bg-black/60 backdrop-blur-sm px-2.5 py-1 rounded border border-white/10">
+                Live Poolside Audio Rig
+              </div>
             </div>
-            <div className="text-[11px] text-slate-400 pt-3 border-t border-white/10 flex items-center justify-between">
-              <span>Poolside Stage Host</span>
-              <span className="text-amber-300 font-semibold">12:00 PM – Late</span>
+            
+            <div className="p-4 sm:p-6 pt-2 flex flex-col justify-between flex-1 space-y-4">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
+                  Official Event Host
+                </span>
+                <h3 className="text-2xl font-black text-white font-display">
+                  Trevor DJ
+                </h3>
+                <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                  Directing the poolside energy, hyping the crowd, and orchestrating transitions from afternoon kick-off till late night.
+                </p>
+              </div>
+              <div className="text-[11px] text-slate-400 pt-3 border-t border-white/10 flex items-center justify-between">
+                <span>Poolside Stage Host</span>
+                <span className="text-amber-300 font-semibold">12:00 PM – Late</span>
+              </div>
             </div>
           </div>
 
           {/* Surprise Headliner Card */}
-          <div className="bg-[#0d1522] p-6 rounded-xl border border-white/10 flex flex-col justify-between space-y-4">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 block mb-1">
-                Guest Feature
-              </span>
-              <h3 className="text-2xl font-black text-white font-display">
-                Special Surprise Artist
-              </h3>
-              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                An exclusive headline artist to be revealed live poolside at sunset. Prepared specially for Pool Party 2026.
-              </p>
+          <div className="bg-[#0d1522] rounded-xl border border-white/10 overflow-hidden flex flex-col justify-between group hover:border-cyan-400/40 transition-colors shadow-lg">
+            <div className="relative h-40 sm:h-48 w-full overflow-hidden">
+              <img
+                src={twilightVibeImg}
+                alt="Twilight sunset stage setting at Prince Resort Bunamwaya"
+                className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
+                referrerPolicy="no-referrer"
+                loading="lazy"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#0d1522] via-[#0d1522]/30 to-transparent" />
+              <div className="absolute bottom-2.5 left-3 text-[10px] font-bold text-cyan-300 uppercase tracking-wider bg-black/60 backdrop-blur-sm px-2.5 py-1 rounded border border-white/10">
+                Sunset Headline Set
+              </div>
             </div>
-            <div className="text-[11px] text-slate-400 pt-3 border-t border-white/10 flex items-center justify-between">
-              <span>Sunset Performance</span>
-              <span className="text-cyan-300 font-semibold">Exclusive Live Set</span>
+
+            <div className="p-4 sm:p-6 pt-2 flex flex-col justify-between flex-1 space-y-4">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 block mb-1">
+                  Guest Feature
+                </span>
+                <h3 className="text-2xl font-black text-white font-display">
+                  Special Surprise Artist
+                </h3>
+                <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                  An exclusive headline artist to be revealed live poolside at sunset. Prepared specially for Pool Party 2026.
+                </p>
+              </div>
+              <div className="text-[11px] text-slate-400 pt-3 border-t border-white/10 flex items-center justify-between">
+                <span>Sunset Performance</span>
+                <span className="text-cyan-300 font-semibold">Exclusive Live Set</span>
+              </div>
             </div>
           </div>
 
@@ -129,14 +164,29 @@ export const LineupAndVibe: React.FC = () => {
               </p>
             </div>
 
-            <div className="bg-[#0d1522] border border-white/10 p-5 rounded-xl space-y-2">
-              <div className="w-9 h-9 rounded-lg bg-emerald-950/60 text-emerald-400 flex items-center justify-center mb-1">
-                <Utensils className="w-4 h-4" />
+            <div className="bg-[#0d1522] border border-white/10 rounded-xl overflow-hidden flex flex-col group hover:border-emerald-400/30 transition-colors">
+              <div className="relative h-28 w-full overflow-hidden">
+                <img
+                  src={refreshmentsImg}
+                  alt="Poolside barbeque skewers and craft cocktails at Prince Resort"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#0d1522] via-[#0d1522]/30 to-transparent" />
+                <div className="absolute bottom-2 left-2 text-[9px] font-bold text-emerald-300 uppercase tracking-wider bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded border border-white/10">
+                  Grill & Cocktails
+                </div>
               </div>
-              <h5 className="text-sm font-bold text-white">Barbeque & Drinks</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Live grill skewers, craft cocktails, beers, and tropical non-alcoholic refreshments.
-              </p>
+              <div className="p-4 space-y-1.5 flex-1 flex flex-col justify-between">
+                <div className="w-8 h-8 rounded-lg bg-emerald-950/60 text-emerald-400 flex items-center justify-center mb-1">
+                  <Utensils className="w-4 h-4" />
+                </div>
+                <h5 className="text-sm font-bold text-white">Barbeque & Drinks</h5>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Live grill skewers, craft cocktails, beers, and tropical non-alcoholic refreshments.
+                </p>
+              </div>
             </div>
 
           </div>

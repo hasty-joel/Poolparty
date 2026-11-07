@@ -12,7 +12,8 @@ type InitiationResult = {
   message: string;
   reservedUntil?: string;
   totalAmountUgx?: number;
-  gateway?: 'hybrid_momo' | 'mtn_momo';
+  relworxInternalRef?: string | null;
+  gateway?: 'hybrid_momo' | 'mtn_momo' | 'relworx' | string;
   error?: string;
   code?: string;
   retryable?: boolean;
@@ -2324,14 +2325,14 @@ export const SupabaseServerService = {
       !verifEmailValid && !verifOrderRef.valid ? formatUgandaMsisdn(rawVerification) : null;
 
     let resolvedOrderRef: string | null = primaryOrderRef.valid ? primaryOrderRef.orderRef : null;
-    let resolvedMsisdn: string | null = primaryPhone?.valid ? primaryPhone.msisdn : null;
+    let resolvedMsisdn: string | null = (primaryPhone && primaryPhone.valid && primaryPhone.msisdn) ? primaryPhone.msisdn : null;
     let resolvedEmailLower: string | null = null;
 
     if (primaryOrderRef.valid) {
       // Primary is orderRef -> verification must be checkout email OR checkout phone
       if (verifEmailValid) {
         resolvedEmailLower = rawVerification.toLowerCase();
-      } else if (verifPhone && verifPhone.valid) {
+      } else if (verifPhone && verifPhone.valid && verifPhone.msisdn) {
         resolvedMsisdn = verifPhone.msisdn;
       } else {
         return {
@@ -3868,7 +3869,7 @@ export const SupabaseServerService = {
       const order = orderInfo.order;
       let paymentVerified = order.status === 'paid' || order.verification_status === 'verified';
 
-      if (!paymentVerified && order.mtn_transaction_id) {
+      if (!paymentVerified && (order as any).mtn_transaction_id) {
         paymentVerified = true;
       }
 
